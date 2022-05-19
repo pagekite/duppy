@@ -36,6 +36,11 @@ Configuration:
     cp examples/duppy-simple.py duppy-local.py
     vi duppy-local.py
 
+*Note:* the 'simple' example assumes you are using an SQL backend for
+storing DNS records and shows how to configure that. If you are doing
+something more excited/complicated, other examples may be better starting
+points. Browse around!
+
 Running the server:
 
     cd /path/to/duppy

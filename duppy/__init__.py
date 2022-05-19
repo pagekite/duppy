@@ -22,7 +22,7 @@ class Server:
     rfc2136_tcp  = True
     rfc2136_udp  = True
     upstream_dns = None
-    log_level    = logging.DEBUG
+    log_level    = logging.INFO
 
     # Database settings
     sql_db_driver   = None

@@ -116,14 +116,14 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
             yield _error(msg, code=1)  # FORMERR, as per RFC2136
 
         elif msg.pd:
-            logging.debug('Rejected %s: FIXME: prereqs do not work' % cli)
+            logging.info('Rejected %s: FIXME: prereqs do not work' % cli)
             yield _error(msg, code=4)  # FIXME: Refused, we dislike prereqs
 
         else:
             zone = msg.zd[0].name.lower()
             keys = await duppy.get_keys(zone)
             if not keys:
-                logging.debug('Rejected %s: No update keys found for %s'
+                logging.info('Rejected %s: No update keys found for %s'
                     % (cli, zone))
                 yield _error(msg, code=9)  # Updates not enabled for zone
 
@@ -156,23 +156,22 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
                     ok = False
                     if qtype == 'ANY' and upd.ttl == 0:
                         args = (upd.name,)
-                        logging.debug('%s: delete_all_rrsets%s' % (cli, args))
+                        logging.info('%s: delete_all_rrsets%s' % (cli, args))
                         ok = await duppy.delete_all_rrsets(*args)
 
                     elif upd.ttl == 0 and data == '':
                         args = (upd.name, qtype)
-                        logging.debug('%s: delete_rrset%s' % (cli, args))
+                        logging.info('%s: delete_rrset%s' % (cli, args))
                         ok = await duppy.delete_rrset(*args)
 
                     elif upd.ttl == 0:
                         args = (upd.name, qtype, data)
-                        logging.debug('%s: delete_from_rrset%s'
-                            % (cli, args))
+                        logging.info('%s: delete_from_rrset%s' % (cli, args))
                         ok = await duppy.delete_from_rrset(*args)
 
                     else:
                         args = (upd.name, qtype, upd.ttl, p1, p2, p3, data)
-                        logging.debug('%s: add_to_rrset%s' % (cli, args))
+                        logging.info('%s: add_to_rrset%s' % (cli, args))
                         ok = await duppy.add_to_rrset(*args)
 
                     if ok:
@@ -183,7 +182,7 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
             yield _error(msg, code=2)  # SERVFAIL
 
     except NotImplemented as e:
-        logging.debug('Rejected %s: %s' % (cli, e))
+        logging.info('Rejected %s: %s' % (cli, e))
         yield _error(msg, code=4)  # Refused, we don't know how to do this
 
     except:

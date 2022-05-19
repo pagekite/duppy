@@ -1,11 +1,12 @@
-# This is a sample Duppy server.
+# This is a sample Duppy server, using custom logic and an in-memory
+# database of records.
 #
-# Since every backend is a special snowflake, you will need to
-# customize this file and write some SQL.
-#
-# See the examples/ folder for more detailed examples.
+# This is mostly useful for testing Duppy itself, but it nicely
+# demonstrates how you would implement support for backends that don't
+# fit our simplistic SQL defaults.
 #
 import duppy
+import logging
 
 
 TEST_KEYS = {
@@ -23,6 +24,7 @@ class MockServer(duppy.Server):
     http_port    = 53080      # Set to None to disable the HTTP server
     rfc2136_port = 53053      # Set to None to disable the RFC2136 server
     upstream_dns = None
+    log_level    = logging.DEBUG
 
     # No database, we're writing our own Python code!
     sql_db_driver = None
