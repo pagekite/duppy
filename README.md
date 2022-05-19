@@ -1,4 +1,4 @@
-# duppy: a RFC2136 DNS update server
+# duppy: a RFC2136 dynamic DNS update server
 
 This is a stand-alone server which implements both a subset of
 [RFC2136](https://datatracker.ietf.org/doc/html/rfc2136) and offers
@@ -11,7 +11,8 @@ like [bind's DLZ](https://kb.isc.org/docs/aa-00995).
 
 ## Project Status
 
-Just getting started.
+[Roadmap and project status are Issue #1](https://github.com/pagekite/duppy/issues/1)
+
 
 
 ## Getting started
@@ -47,3 +48,13 @@ Running the server:
     . .env/bin/activate
     python3 duppy-local.py
 
+
+## Copyright, License, Thanks
+
+Copyright (C) 2022, The Beanstalks Project ehf. and Bjarni R. Einarsson.
+
+MIT License: See the file [LICENSE](LICENSE) for details.
+
+Big thanks to the [async_dns](https://github.com/gera2ld/async_dns),
+and [dnspython](https://www.dnspython.org/) projects! Without them this
+would have been much more difficult.

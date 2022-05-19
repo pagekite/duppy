@@ -23,8 +23,8 @@ from async_dns.core.record import (
     CNAME_RData)
 
 
-# async_dns does not currently support TSIG, so we need this for
-# validation.
+# Sadly, async_dns does not currently support TSIG, so we need this
+# for validation and generation of correctly signed replies.
 import dns.tsig
 import dns.message
 import dns.tsigkeyring
