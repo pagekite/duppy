@@ -1,24 +1,14 @@
 import asyncio
 import logging
 
-
-class PGBackend:
-    def __init__(self, duppy):
-        import aiopg
-        self.duppy = duppy
-
-
-class MySQLBackend:
-    def __init__(self, duppy):
-        import aiomysql
-        self.duppy = duppy
+from . import backends
 
 
 class Server:
     # App settings, defaults
     listen_on    = '0.0.0.0'
     http_port    = 5380
-    rfc2136_port = 53
+    rfc2136_port = 8053
     rfc2136_tcp  = True
     rfc2136_udp  = True
     upstream_dns = None
@@ -42,11 +32,9 @@ class Server:
     def __init__(self):
         self.db = None
         if self.sql_db_driver == 'aiopg':
-            self.db = PGBackend(self)
+            self.db = backends.PGBackend(self)
         elif self.sql_db_driver == 'aiomysql':
-            self.db = MySQLBackend(self)
-        elif self.sql_db_driver == 'fake':
-            self.db = FakeSQLBackend(self)
+            self.db = backends.MySQLBackend(self)
         elif self.sql_db_driver is not None:
             raise ValueError('Unknown DB driver: %s' % self.sql_db_driver)
 
