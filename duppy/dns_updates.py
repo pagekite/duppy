@@ -34,7 +34,7 @@ import dns.tsigkeyring
 org_server_handle_dns = async_dns.server.handle_dns
 
 
-class NotImplemented(Exception):
+class UpdateRejected(Exception):
     pass
 
 
@@ -62,11 +62,18 @@ class NsUpdateResolver(ProxyResolver):
         self.duppy = duppy
 
 
-def _error(msg, code=2):
-    return DNSMessage(qr=1, o=msg.o, qid=msg.qid, aa=0, r=code).pack()
+def response(msg, keys, code=2):
+    if isinstance(msg, DNSMessage):
+        return DNSMessage(qr=1, o=msg.o, qid=msg.qid, aa=0, r=code).pack()
+    elif isinstance(msg, dns.message.Message):
+        response = dns.message.make_response(msg)
+        response.set_rcode(code)
+        return response.to_wire()
+    else:
+        return DNSMessage(qr=1, qid=0, aa=0, r=code).pack()
 
 
-async def validate_hmac(msg, raw_data, cli, keys):
+async def validate_hmac(msg, raw_data, cli, rargs):
     # Make sure there are some TSIGs, otherwise the validator
     # below will happily parse the request as valid!
     if len([r for r in msg.ar if r.qtype == 250]) < 1:
@@ -75,18 +82,30 @@ async def validate_hmac(msg, raw_data, cli, keys):
             % cli)
         return False
 
+    # Keys come from rargs, due to the hack explained below.
+    keys = rargs[1]
+
     zone = msg.zd[0].name.lower()
     reasons = []
-    for secret in keys:
+    while keys:
+        secret = keys.pop(0)
         try:
             keyring = dns.tsigkeyring.from_text({
                 zone: secret,
                 zone+'.': secret})
             valid = dns.message.from_wire(raw_data, keyring)
+
+            # So this is weird magic: here we change our response args
+            # to include the dns.message.Message and keyring, so we can
+            # use dnspython to generate signed replies.
+            rargs[0] = valid
+            rargs[1] = keyring
+
             return True
         except Exception as e:
             reasons.append(str(e))
-    logging.debug(
+
+    logging.info(
         'Rejected %s: Failed to validate HMAC. Tried %d key(s): %s'
         % (cli, len(reasons), ', '.join(reasons)))
     return False
@@ -94,11 +113,14 @@ async def validate_hmac(msg, raw_data, cli, keys):
 
 async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
     '''Handle DNS Update requests'''
+    duppy = resolver.duppy
+    keys = []
     msg = data
     cli = addr[0]
+    rargs = [None, keys]
     try:
-        duppy = resolver.duppy
         msg = DNSUpdateMessage.parse(data)
+        rargs = [msg, keys]
         if msg.zd is None:
             # This happens with nsupdate, if people do not specify a zone.
             # Without the zone, nsupdate sends SOA queries to guess it.
@@ -109,30 +131,42 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
                     yield r
             else:
                 logging.debug('Rejected %s: non-update query' % cli)
-                yield _error(msg, code=4)  # Not implemented
+                yield response(*rargs, code=4)
 
         elif (len(msg.zd) != 1) or (msg.zd[0].qtype != types.SOA):
             logging.debug('Rejected %s: update Zone section is invalid' % cli)
-            yield _error(msg, code=1)  # FORMERR, as per RFC2136
+            yield response(*rargs, code=1)
 
         elif msg.pd:
             logging.info('Rejected %s: FIXME: prereqs do not work' % cli)
-            yield _error(msg, code=4)  # FIXME: Refused, we dislike prereqs
+            yield response(*rargs, code=4)
 
         else:
             zone = msg.zd[0].name.lower()
-            keys = await duppy.get_keys(zone)
+            keys[:] = await duppy.get_keys(zone)
             if not keys:
                 logging.info('Rejected %s: No update keys found for %s'
                     % (cli, zone))
-                yield _error(msg, code=9)  # Updates not enabled for zone
+                yield response(*rargs, code=9)
 
-            elif not await validate_hmac(msg, data, cli, keys):
-                yield _error(msg, code=5)  # Refused
+            # Note: Here be magic, validate_hmac will as a side-effect
+            #       change rargs so responses from here on get signed.
+            elif not await validate_hmac(msg, data, cli, rargs):
+                yield response(*rargs, code=5)
 
             else:
                 updates = []
                 for upd in msg.up:
+                    qclass = {255: 'ANY', 254: 'NONE', 1: 'zone'}[upd.qclass]
+
+                    if not (upd.name.endswith('.'+zone) or upd.name == zone):
+                        raise UpdateRejected(
+                            'Not in zone %s: %s' % (zone, upd.name))
+
+                    if (qclass == 'zone') and (upd.ttl < duppy.minimum_ttl):
+                        raise UpdateRejected('TTL too low: %d < %d'
+                            % (upd.ttl, duppy.minimum_ttl))
+
                     p1 = p2 = p3 = 0
                     data = upd.data
                     qtype = types.get_name(upd.qtype)
@@ -146,48 +180,58 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
                         data = data.hostname
                     elif qtype in ('A', 'AAAA', 'TXT', 'SRV', 'MX'):
                         data = data.data
-                    elif qtype == 'ANY':
+                    elif qclass == qtype == 'ANY' and upd.ttl == 0:
                         data = ''
                     else:
-                        raise NotImplemented('Unimplemented: %s' % upd)
-                    updates.append((upd, qtype, p1, p2, p3, data))
+                        raise UpdateRejected('Unimplemented: %s' % upd)
 
-                for upd, qtype, p1, p2, p3, data in updates:
-                    ok = False
-                    if qtype == 'ANY' and upd.ttl == 0:
+                    if upd.name == zone and qtype == 'ANY' and upd.ttl == 0:
+                        raise UpdateRejected(
+                            'Refused to delete entire zone: %s' % zone)
+
+                    # If we get this far, we like this update?
+                    updates.append((upd, qtype, qclass, p1, p2, p3, data))
+
+                ok = False
+                for upd, qtype, qclass, p1, p2, p3, data in updates:
+                    if qclass == qtype == 'ANY' and upd.ttl == 0:
                         args = (upd.name,)
                         logging.info('%s: delete_all_rrsets%s' % (cli, args))
                         ok = await duppy.delete_all_rrsets(*args)
 
-                    elif upd.ttl == 0 and data == '':
+                    elif qclass == 'ANY' and upd.ttl == 0 and data == '':
                         args = (upd.name, qtype)
                         logging.info('%s: delete_rrset%s' % (cli, args))
                         ok = await duppy.delete_rrset(*args)
 
-                    elif upd.ttl == 0:
+                    elif qclass == 'NONE' and upd.ttl == 0:
                         args = (upd.name, qtype, data)
                         logging.info('%s: delete_from_rrset%s' % (cli, args))
                         ok = await duppy.delete_from_rrset(*args)
 
-                    else:
+                    elif qclass == 'zone':
                         args = (upd.name, qtype, upd.ttl, p1, p2, p3, data)
                         logging.info('%s: add_to_rrset%s' % (cli, args))
                         ok = await duppy.add_to_rrset(*args)
 
-                    if ok:
-                        pass  # FIXME: report success
                     else:
-                        yield _error(msg, code=2)  # SERVFAIL
+                        ok = False
 
-            yield _error(msg, code=2)  # SERVFAIL
+                    if not ok:
+                        break
 
-    except NotImplemented as e:
+                if ok:
+                    yield response(*rargs, code=0)  # NOERROR
+                else:
+                    yield response(*rargs, code=2)  # SERVFAIL
+
+    except UpdateRejected as e:
         logging.info('Rejected %s: %s' % (cli, e))
-        yield _error(msg, code=4)  # Refused, we don't know how to do this
+        yield response(*rargs, code=4)
 
     except:
         logging.exception('Rejected %s: Internal error' % cli)
-        yield _error(msg, code=2)  # SERVFAIL
+        yield response(*rargs, code=2)  # SERVFAIL
 
 
 async def start_dns_server(duppy):

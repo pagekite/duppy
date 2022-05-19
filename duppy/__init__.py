@@ -23,6 +23,7 @@ class Server:
     rfc2136_udp  = True
     upstream_dns = None
     log_level    = logging.INFO
+    minimum_ttl  = 120
 
     # Database settings
     sql_db_driver   = None
