@@ -10,8 +10,11 @@ import logging
 
 
 TEST_KEYS = {
-    'example.com' : ['+fnQhoAij/FNM0yCANXkKnxZCNIL7XI2yYRJokvTn+U='],
-    'example.org' : ['+fnQhoAij/FNM0yCANXkKnxZCNIL7XI2yYRJokvTn+U=']
+    'example.com' : [
+        'FM4d4LDAs9jP/N8EkvhhayqtqcO4tUJzvxsPyG20fkCE7g2IizVaTdeAwudLkwvhVECo50te6gJKhoxJkqUMOA==',
+        'QlRlQTl4OA46nPX0/QEk65AECEbreeF8K7guyr5bAsk=',
+        '+fnQhoAij/FNM0yCANXkKnxZCNIL7XI2yYRJokvTn+U='],
+    'example.org' : ['+fnQhoAij/FNM0yCANXkKnxZCNIL7XI2yYRJokvTn+U='],
 }
 
 MOCK_ZONE = []
@@ -20,11 +23,7 @@ MOCK_ZONE = []
 class MockServer(duppy.Server):
 
     # App settings
-    listen_on    = '127.0.0.2'
-    http_port    = 53080      # Set to None to disable the HTTP server
-    rfc2136_port = 53053      # Set to None to disable the RFC2136 server
-    upstream_dns = None
-    log_level    = logging.DEBUG
+    listen_on = '127.0.0.2'
 
     # No database, we're writing our own Python code!
     sql_db_driver = None
