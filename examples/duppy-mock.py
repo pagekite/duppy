@@ -42,19 +42,19 @@ class MockServer(duppy.Server):
             logging.debug('Zone %s unavailable for updates' % zone)
             return []
 
-    async def delete_all_rrsets(self, dbT, dns_name):
+    async def delete_all_rrsets(self, dbT, zone, dns_name):
         global MOCK_ZONE
         MOCK_ZONE = [rr for rr in MOCK_ZONE if rr[0] == dns_name]
         return True
 
-    async def delete_rrset(self, dbT, dns_name, rtype):
+    async def delete_rrset(self, dbT, zone, dns_name, rtype):
         global MOCK_ZONE
         MOCK_ZONE = [rr for rr in MOCK_ZONE
             if rr[0] == dns_name
             and rr[1] == rtype]
         return True
 
-    async def delete_from_rrset(self, dbT, dns_name, rtype, rdata):
+    async def delete_from_rrset(self, dbT, zone, dns_name, rtype, rdata):
         global MOCK_ZONE
         MOCK_ZONE = [rr for rr in MOCK_ZONE
             if rr[0] == dns_name
@@ -62,7 +62,7 @@ class MockServer(duppy.Server):
             and rr[-1] == rdata]
         return True
 
-    async def add_to_rrset(self, dbT, dns_name, rtype, ttl, i1, i2, i3, rdata):
+    async def add_to_rrset(self, dbT, zone, dns_name, rtype, ttl, i1, i2, i3, rdata):
         global MOCK_ZONE
         rr = [dns_name, rtype, ttl, i1, i2, i3, rdata]
         if rr not in MOCK_ZONE:

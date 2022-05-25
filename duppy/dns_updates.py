@@ -198,22 +198,22 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
                 ok = 0
                 for upd, qtype, qclass, p1, p2, p3, data in updates:
                     if qclass == qtype == 'ANY' and upd.ttl == 0:
-                        args = (upd.name,)
+                        args = (zone, upd.name,)
                         logging.info('%s: delete_all_rrsets%s' % (cli, args))
                         ok = await duppy.delete_all_rrsets(dbT, *args)
 
                     elif qclass == 'ANY' and upd.ttl == 0 and data == '':
-                        args = (upd.name, qtype)
+                        args = (zone, upd.name, qtype)
                         logging.info('%s: delete_rrset%s' % (cli, args))
                         ok = await duppy.delete_rrset(dbT, *args)
 
                     elif qclass == 'NONE' and upd.ttl == 0:
-                        args = (upd.name, qtype, data)
+                        args = (zone, upd.name, qtype, data)
                         logging.info('%s: delete_from_rrset%s' % (cli, args))
                         ok = await duppy.delete_from_rrset(dbT, *args)
 
                     elif qclass == 'zone':
-                        args = (upd.name, qtype, upd.ttl, p1, p2, p3, data)
+                        args = (zone, upd.name, qtype, upd.ttl, p1, p2, p3, data)
                         logging.info('%s: add_to_rrset%s' % (cli, args))
                         # FIXME: We need to delete_rrset or delete_from_rrset
                         #        to ensure we do not end up with duplicate
@@ -232,7 +232,7 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
                     ok = await duppy.notify_changed(dbT, zone) and ok
 
                 if ok:
-                    if duppy.transaction_commit(dbT, zone):
+                    if await duppy.transaction_commit(dbT, zone):
                         yield response(*rargs, code=0)  # NOERROR
                     else:
                         yield response(*rargs, code=2)  # SERVFAIL

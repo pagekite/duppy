@@ -36,6 +36,8 @@ class Server:
             self.db = backends.PGBackend(self)
         elif self.sql_db_driver == 'aiomysql':
             self.db = backends.MySQLBackend(self)
+        elif self.sql_db_driver == 'sqlite3':
+            self.db = backends.SQLiteBackend(self)
         elif self.sql_db_driver is not None:
             raise ValueError('Unknown DB driver: %s' % self.sql_db_driver)
 
@@ -57,27 +59,32 @@ class Server:
 
     async def get_keys(self, zone):
         if self.db and self.sql_get_keys:
-            return await self.db.select(self.sql_get_keys, zone=zone)
+            return [
+                row[0] for row in
+                await self.db.select(self.sql_get_keys, zone=zone)]
         return []
 
-    async def delete_all_rrsets(self, transaction, dns_name):
+    async def delete_all_rrsets(self, transaction, zone, dns_name):
         if transaction and self.sql_delete_all_rrsets:
             await transaction.sql(self.sql_delete_all_rrsets,
+                zone=zone,
                 dns_name=dns_name)
             return True
         return False
 
-    async def delete_rrset(self, transaction, dns_name, rtype):
+    async def delete_rrset(self, transaction, zone, dns_name, rtype):
         if transaction and self.sql_delete_rrset:
             await transaction.sql(self.sql_delete_rrset,
+                zone=zone,
                 dns_name=dns_name,
                 rtype=rtype)
             return True
         return False
 
-    async def delete_from_rrset(self, transaction, dns_name, rtype, rdata):
+    async def delete_from_rrset(self, transaction, zone, dns_name, rtype, rdata):
         if transaction and self.sql_delete_from_rrset:
             await transaction.sql(self.sql_delete_from_rrset,
+                zone=zone,
                 dns_name=dns_name,
                 rtype=rtype,
                 rdata=rdata)
@@ -85,9 +92,10 @@ class Server:
         return False
 
     async def add_to_rrset(self,
-            transaction, dns_name, rtype, ttl, i1, i2, i3, rdata):
+            transaction, zone, dns_name, rtype, ttl, i1, i2, i3, rdata):
         if transaction and self.sql_add_to_rrset:
             await transaction.sql(self.sql_add_to_rrset,
+                zone=zone,
                 dns_name=dns_name,
                 rtype=rtype,
                 ttl=ttl,
@@ -104,7 +112,11 @@ class Server:
             return True
         return False
 
+    async def startup_tasks(self):
+        pass
+
     async def main(self):
+        await self.startup_tasks()
         tasks = []
         if self.rfc2136_port:
             from . import dns_updates
