@@ -124,7 +124,7 @@ class Server:
 
         if self.http_port:
             from . import http_updates
-            tasks.append(http_updates.AsyncHttpApiServer(self))
+            tasks.append(await http_updates.AsyncHttpApiServer(self).run())
 
         logging.debug('%s' % tasks)
         await asyncio.wait(tasks)

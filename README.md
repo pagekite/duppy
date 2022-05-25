@@ -56,8 +56,10 @@ Copyright (C) 2022, The Beanstalks Project ehf. and Bjarni R. Einarsson.
 
 MIT License: See the file [LICENSE](LICENSE) for details.
 
-Big thanks to the [async_dns](https://github.com/gera2ld/async_dns),
-and [dnspython](https://www.dnspython.org/) projects! Without them this
+Big thanks to the
+[async_dns](https://github.com/gera2ld/async_dns),
+[dnspython](https://www.dnspython.org/) and
+[aiohttp](https://docs.aiohttp.org/) projects! Without them this
 would have been much more difficult.
 
 Thanks to [1984 Hosting](https://1984.hosting/) for sponsoring part
