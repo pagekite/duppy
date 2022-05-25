@@ -3,9 +3,11 @@
 # Since every backend is a special snowflake, you will need to
 # customize this file and write some SQL.
 #
-# See the examples/ folder for more detailed examples.
+# See the examples/ folder for more examples.
 #
 import duppy
+import logging
+
 
 TEST_KEYS = {
     'example.com' : [
@@ -24,9 +26,17 @@ class MyServer(duppy.Server):
     rfc2136_port = 8053       # Set to None to disable the RFC2136 server
     upstream_dns = '8.8.8.8'  # Replace with the IP address of your primary DNS
 
+    # Miscellaneous settings.
+    log_level    = logging.INFO
+    minimum_ttl  = 120
+
     # Database settings
     sql_db_driver   = 'sqlite3'      # 'aiopg', 'aiomysql' or None
     sql_db_database = '/tmp/duppy-test.sq3'
+    # Unused here, but you might need:
+    sql_db_host     = None
+    sql_db_username = None
+    sql_db_password = None
 
     # Database operations; set any of these to None to disable the operation.
     sql_get_keys = """
@@ -61,6 +71,15 @@ class MyServer(duppy.Server):
                       %(i3)s,
                       %(rdata)s)
         """
+    #
+    # The following is how we signal that a zone has changed, so secondary
+    # servers know they need to update. Set to None if your database handles
+    # this automatically using a trigger function.
+    #
+    # If a DB update is insufficient, and you need to execute some code
+    # for this, then override duppy.Server.notify_changed. There is an
+    # example of that in `examples/duppy-mock.py`.
+    #
     sql_notify_changed = """
         UPDATE zone_data
            SET i1 = ((i1 + 1) % 4294967295) + 1
@@ -69,6 +88,7 @@ class MyServer(duppy.Server):
         """
 
     async def startup_tasks(self):
+        # This defines some test tables to play with. Delete this!
         import sqlite3
         dbT = await self.db.start_transaction()
         try:

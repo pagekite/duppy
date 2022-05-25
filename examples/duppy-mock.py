@@ -5,6 +5,8 @@
 # demonstrates how you would implement support for backends that don't
 # fit our simplistic SQL defaults.
 #
+# See the examples/ folder for more examples.
+#
 import duppy
 import logging
 
