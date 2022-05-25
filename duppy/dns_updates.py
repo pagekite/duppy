@@ -115,8 +115,10 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
     '''Handle DNS Update requests'''
     duppy = resolver.duppy
     keys = []
+    dbT = None
     msg = data
     cli = addr[0]
+    changes = 0
     rargs = [None, keys]
     try:
         msg = DNSUpdateMessage.parse(data)
@@ -192,37 +194,51 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
                     # If we get this far, we like this update?
                     updates.append((upd, qtype, qclass, p1, p2, p3, data))
 
-                ok = False
+                dbT = await duppy.transaction_start(zone)
+                ok = 0
                 for upd, qtype, qclass, p1, p2, p3, data in updates:
                     if qclass == qtype == 'ANY' and upd.ttl == 0:
                         args = (upd.name,)
                         logging.info('%s: delete_all_rrsets%s' % (cli, args))
-                        ok = await duppy.delete_all_rrsets(*args)
+                        ok = await duppy.delete_all_rrsets(dbT, *args)
 
                     elif qclass == 'ANY' and upd.ttl == 0 and data == '':
                         args = (upd.name, qtype)
                         logging.info('%s: delete_rrset%s' % (cli, args))
-                        ok = await duppy.delete_rrset(*args)
+                        ok = await duppy.delete_rrset(dbT, *args)
 
                     elif qclass == 'NONE' and upd.ttl == 0:
                         args = (upd.name, qtype, data)
                         logging.info('%s: delete_from_rrset%s' % (cli, args))
-                        ok = await duppy.delete_from_rrset(*args)
+                        ok = await duppy.delete_from_rrset(dbT, *args)
 
                     elif qclass == 'zone':
                         args = (upd.name, qtype, upd.ttl, p1, p2, p3, data)
                         logging.info('%s: add_to_rrset%s' % (cli, args))
-                        ok = await duppy.add_to_rrset(*args)
+                        # FIXME: We need to delete_rrset or delete_from_rrset
+                        #        to ensure we do not end up with duplicate
+                        #        records; which depends on the rtype.
+                        ok = await duppy.add_to_rrset(dbT, *args)
 
                     else:
                         ok = False
 
-                    if not ok:
+                    if ok:
+                        changes += 1
+                    else:
                         break
 
+                if changes:
+                    ok = await duppy.notify_changed(dbT, zone) and ok
+
                 if ok:
-                    yield response(*rargs, code=0)  # NOERROR
+                    if duppy.transaction_commit(dbT, zone):
+                        yield response(*rargs, code=0)  # NOERROR
+                    else:
+                        yield response(*rargs, code=2)  # SERVFAIL
+                    dbT = None
                 else:
+                    # Rollback happens finally (below)
                     yield response(*rargs, code=2)  # SERVFAIL
 
     except UpdateRejected as e:
@@ -232,6 +248,10 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
     except:
         logging.exception('Rejected %s: Internal error' % cli)
         yield response(*rargs, code=2)  # SERVFAIL
+
+    finally:
+        if dbT is not None:
+            await duppy.transaction_rollback(dbT, zone, silent=(not changes))
 
 
 async def start_dns_server(duppy):

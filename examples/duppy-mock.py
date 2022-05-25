@@ -28,6 +28,11 @@ class MockServer(duppy.Server):
     # No database, we're writing our own Python code!
     sql_db_driver = None
 
+    # We don't support transactions, so we don't implement these
+    #   - transaction_start
+    #   - transaction_commit
+    #   - transaction_rollback
+
     async def get_keys(self, zone):
         while zone[-1:] == '.':
             zone = zone[:-1]
@@ -37,19 +42,19 @@ class MockServer(duppy.Server):
             logging.debug('Zone %s unavailable for updates' % zone)
             return []
 
-    async def delete_all_rrsets(self, dns_name):
+    async def delete_all_rrsets(self, dbT, dns_name):
         global MOCK_ZONE
         MOCK_ZONE = [rr for rr in MOCK_ZONE if rr[0] == dns_name]
         return True
 
-    async def delete_rrset(self, dns_name, rtype):
+    async def delete_rrset(self, dbT, dns_name, rtype):
         global MOCK_ZONE
         MOCK_ZONE = [rr for rr in MOCK_ZONE
             if rr[0] == dns_name
             and rr[1] == rtype]
         return True
 
-    async def delete_from_rrset(self, dns_name, rtype, rdata):
+    async def delete_from_rrset(self, dbT, dns_name, rtype, rdata):
         global MOCK_ZONE
         MOCK_ZONE = [rr for rr in MOCK_ZONE
             if rr[0] == dns_name
@@ -57,12 +62,17 @@ class MockServer(duppy.Server):
             and rr[-1] == rdata]
         return True
 
-    async def add_to_rrset(self, dns_name, rtype, ttl, i1, i2, i3, rdata):
+    async def add_to_rrset(self, dbT, dns_name, rtype, ttl, i1, i2, i3, rdata):
         global MOCK_ZONE
         rr = [dns_name, rtype, ttl, i1, i2, i3, rdata]
         if rr not in MOCK_ZONE:
             MOCK_ZONE.append(rr)
         return True
+
+    async def notify_changed(self, dbT, zone):
+        print('*** Zone changed %s ***' % zone)
+        print('%s' % '\n'.join('%s' % rr for rr in MOCK_ZONE))
+        print('***')
 
 
 try:

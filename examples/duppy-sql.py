@@ -26,7 +26,7 @@ class MyServer(duppy.Server):
     # Database operations; set any of these to None to disable the operation.
     sql_get_keys = """
         SELECT key FROM zone_keys WHERE zone = %(zone)s
-"""
+        """
     sql_delete_all_rrsets = """
         DELETE FROM zone_data
               WHERE hostname = %s
@@ -51,7 +51,13 @@ class MyServer(duppy.Server):
                       %(i2)s,
                       %(i3)s,
                       %(rdata)s)
-    """
+        """
+    sql_notify_changed = """
+        UPDATE zone_data
+           SET serial = ((serial + 1) % 4294967295) + 1
+         WHERE zone = %(zone)s
+           AND type = 'SOA'
+        """
 
 
 MyServer().run()

@@ -34,11 +34,12 @@ Installation:
 Configuration:
 
     cd /path/to/duppy
-    cp examples/duppy-simple.py duppy-local.py
+    cp examples/duppy-sql.py duppy-local.py
     vi duppy-local.py
 
-*Note:* the 'simple' example assumes you are using an SQL backend for
-storing DNS records and shows how to configure that. If you are doing
+*Note:* the `duppy-sql.py` example assumes you are using an SQL backend
+for storing DNS records and gives an example of how to configure that by
+writing SQL statements that match your schema. If you are doing
 something more excited/complicated, other examples may be better starting
 points. Browse around!
 
