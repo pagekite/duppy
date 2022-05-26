@@ -5,6 +5,17 @@ from . import backends
 
 
 class Server:
+    """
+    This is the main duppy Server class. You are expected to subclass
+    this to adapt the server to your local setup.
+
+    The default methods assume an SQL-style backend, and expect a
+    subclass to set the sql_* variables to appropriate SQL statements
+    matching your local schema. If you aren't using SQL, you may need
+    to override the delete_*, add_to_rrset and notify_changed methods
+    directly.
+    """
+
     # App settings, defaults
     listen_on    = '0.0.0.0'
     http_port    = 5380
@@ -30,34 +41,50 @@ class Server:
     sql_add_to_rrset = None
     sql_notify_changed = None
 
+    BACKENDS = {
+        'aiopg': backends.PGBackend,
+        'aiomysql': backends.MySQLBackend,
+        'sqlite3': backends.SQLiteBackend}
+
     def __init__(self):
         self.db = None
-        if self.sql_db_driver == 'aiopg':
-            self.db = backends.PGBackend(self)
-        elif self.sql_db_driver == 'aiomysql':
-            self.db = backends.MySQLBackend(self)
-        elif self.sql_db_driver == 'sqlite3':
-            self.db = backends.SQLiteBackend(self)
+        if self.sql_db_driver in self.BACKENDS:
+            self.db = self.BACKENDS[self.sql_db_driver](self)
         elif self.sql_db_driver is not None:
             raise ValueError('Unknown DB driver: %s' % self.sql_db_driver)
 
     async def transaction_start(self, zone):
+        """
+        FIXME
+        """
         if self.db:
             return await self.db.start_transaction()
         return None
 
     async def transaction_commit(self, transaction, zone):
+        """
+        FIXME
+        """
         if transaction:
-            await transaction.commit()
+            return await transaction.commit()
+        return True
 
     async def transaction_rollback(self, transaction, zone, silent=False):
+        """
+        FIXME
+        """
         if not (transaction and await transaction.rollback()):
             if not silent:
                 logging.error(
                     'Rollback failed: zone %s may be in inconsistent state'
                     % (zone,))
+            return False
+        return True
 
     async def get_keys(self, zone):
+        """
+        FIXME
+        """
         if self.db and self.sql_get_keys:
             return [
                 row[0] for row in
@@ -65,6 +92,9 @@ class Server:
         return []
 
     async def delete_all_rrsets(self, transaction, zone, dns_name):
+        """
+        FIXME
+        """
         if transaction and self.sql_delete_all_rrsets:
             await transaction.sql(self.sql_delete_all_rrsets,
                 zone=zone,
@@ -73,6 +103,9 @@ class Server:
         return False
 
     async def delete_rrset(self, transaction, zone, dns_name, rtype):
+        """
+        FIXME
+        """
         if transaction and self.sql_delete_rrset:
             await transaction.sql(self.sql_delete_rrset,
                 zone=zone,
@@ -82,6 +115,9 @@ class Server:
         return False
 
     async def delete_from_rrset(self, transaction, zone, dns_name, rtype, rdata):
+        """
+        FIXME
+        """
         if transaction and self.sql_delete_from_rrset:
             await transaction.sql(self.sql_delete_from_rrset,
                 zone=zone,
@@ -93,6 +129,9 @@ class Server:
 
     async def add_to_rrset(self,
             transaction, zone, dns_name, rtype, ttl, i1, i2, i3, rdata):
+        """
+        FIXME
+        """
         if transaction and self.sql_add_to_rrset:
             await transaction.sql(self.sql_add_to_rrset,
                 zone=zone,
@@ -107,29 +146,53 @@ class Server:
         return False
 
     async def notify_changed(self, transaction, zone):
+        """
+        This is called at the end of an update, if changes have been made.
+        Subclasses may want to override this, to invoke custom logic to
+        notify secondary DNS servers they need to check for updates.
+        """
         if transaction and self.sql_notify_changed:
             await transaction.sql(self.sql_notify_changed, zone=zone)
-            return True
-        return False
+        return True
 
     async def startup_tasks(self):
+        """
+        Subclasses can override this to perform tasks after the event loop
+        has started (so async works), but before the DNS and HTTP servers
+        have started running.
+        """
         pass
+
+    async def get_dns_server_tasks(self):
+        """
+        Subclasses can override this to return their own DNS server task.
+        """
+        from . import dns_updates
+        return await dns_updates.AsyncDnsUpdateServer(self)
+
+    async def get_http_server_tasks(self):
+        """
+        Subclasses can override this to return their own HTTP server task.
+        """
+        from . import http_updates
+        return [await http_updates.AsyncHttpApiServer(self).run()]
 
     async def main(self):
         await self.startup_tasks()
+
         tasks = []
         if self.rfc2136_port:
-            from . import dns_updates
-            tasks.extend(await dns_updates.AsyncDnsUpdateServer(self))
-
+            tasks.extend(await self.get_dns_server_tasks())
         if self.http_port:
-            from . import http_updates
-            tasks.append(await http_updates.AsyncHttpApiServer(self).run())
+            tasks.extend(await self.get_http_server_tasks())
 
         logging.debug('%s' % tasks)
         await asyncio.wait(tasks)
 
     def run(self):
+        """
+        Starts the asyncio loop, running the duppy.Server.main() task.
+        """
         logging.basicConfig(level=self.log_level)
         loop = asyncio.get_event_loop()
         loop.create_task(self.main())

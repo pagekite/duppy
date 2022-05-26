@@ -75,6 +75,7 @@ class MockServer(duppy.Server):
         print('*** Zone changed %s ***' % zone)
         print('%s' % '\n'.join('%s' % rr for rr in MOCK_ZONE))
         print('***')
+        return True
 
 
 try:
