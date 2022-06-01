@@ -80,6 +80,9 @@ class AsyncHttpApiServer:
         def _op(cli, dbT):
             args = (zone, dns_name, rtype, ttl, i1, i2, i3, data)
             logging.info('%s: add_to_rrset%s' % (cli, args))
+            # FIXME: We need to delete_rrset or delete_from_rrset
+            #        to ensure we do not end up with duplicate
+            #        records; which depends on the rtype.
             return self.duppy.add_to_rrset(dbT, *args)
         return _op
 
@@ -189,25 +192,41 @@ class AsyncHttpApiServer:
         dbT = None
         zone = None
         changes = 0
+        cli = request.remote
         try:
             data = await request.json()
             key = data.get('key')
             zone = data.get('zone')
+
+            keys = await self.duppy.get_keys(zone)
+            if not keys:
+                logging.info('Rejected %s: No update keys found for %s'
+                    % (cli, zone))
+                raise PermissionError('DNS updates unavailable for %s' % zone)
+
+            auth = request.query.get(
+                'key', request.headers.get('Authorization', ''))
+            if auth.lower().startswith('bearer '):
+                auth = auth.split(' ', 1)[1].strip()
+            else:
+                auth = auth.replace(' ', '+').strip()  # Escaping is hard, yo
+            if not auth or auth not in keys:
+                logging.info('Rejected %s: No valid keys provided for %s'
+                    % (cli, zone))
+                raise PermissionError('Invalid DNS update key for %s' % zone)
+
             updates = data.get('updates')
             if (not isinstance(updates, list)
                     or len(updates) < 1
                     or not isinstance(updates[0], dict)):
                 raise ValueError('Need a list of updates')
 
-            # FIXME: Check authentication!
-            #        Does the key match one we have on file?
-
             ops = self._updates_to_ops(zone, updates)
             dbT = await self.duppy.transaction_start(zone)
             ok = True
             results = []
             for req, op in ops:
-                ok = await op(request.remote, dbT)
+                ok = await op(cli, dbT)
                 if ok:
                     results.append(['ok', req])
                     changes += 1
@@ -227,6 +246,9 @@ class AsyncHttpApiServer:
         except ValueError as e:
             resp = web.json_response({'error': str(e)})
             resp.set_status(400, 'Bad request')
+        except PermissionError as e:
+            resp = web.json_response({'error': str(e)})
+            resp.set_status(403, 'Access denied')
         except json.decoder.JSONDecodeError:
             resp = web.json_response({'error': 'Invalid JSON'})
             resp.set_status(400, 'Bad request')

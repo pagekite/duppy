@@ -158,6 +158,11 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
 
             else:
                 updates = []
+
+                # FIXME: This logic overlaps a great deal with the logic
+                #        in the HTTP API, we should find a way to unify to
+                #        avoid duplicate effort and divergent behavior.
+
                 for upd in msg.up:
                     qclass = {255: 'ANY', 254: 'NONE', 1: 'zone'}[upd.qclass]
 
