@@ -54,9 +54,22 @@ class Server:
         elif self.sql_db_driver is not None:
             raise ValueError('Unknown DB driver: %s' % self.sql_db_driver)
 
+    def is_in_zone(self, zone, dns_name):
+        """
+        Returns True if the DNS name (hostname) is in the given zone, False
+        otherwise.
+
+        Override this if your setup has custom rules for this (e.g. treating
+        dashes as a subdomain separator).
+        """
+        return ((zone == dns_name)
+            or  (dns_name.endswith('.' + zone)))
+
     async def transaction_start(self, zone):
         """
-        FIXME
+        Starts a transaction and returns a handle representing it. This
+        handle will be passed as an argument to subsequent database
+        operations.
         """
         if self.db:
             return await self.db.start_transaction()
@@ -64,7 +77,7 @@ class Server:
 
     async def transaction_commit(self, transaction, zone):
         """
-        FIXME
+        Commit a set of changes to the database (end transaction).
         """
         if transaction:
             return await transaction.commit()
@@ -72,7 +85,7 @@ class Server:
 
     async def transaction_rollback(self, transaction, zone, silent=False):
         """
-        FIXME
+        Cancel a set of changes to the database (abort transaction).
         """
         if not (transaction and await transaction.rollback()):
             if not silent:
@@ -84,7 +97,7 @@ class Server:
 
     async def get_keys(self, zone):
         """
-        FIXME
+        Fetch the current valid keys for a given zone, as a list.
         """
         if self.db and self.sql_get_keys:
             return [
@@ -94,7 +107,7 @@ class Server:
 
     async def delete_all_rrsets(self, transaction, zone, dns_name):
         """
-        FIXME
+        Delete all records for a given DNS name.
         """
         if transaction and self.sql_delete_all_rrsets:
             await transaction.sql(self.sql_delete_all_rrsets,
@@ -105,7 +118,7 @@ class Server:
 
     async def delete_rrset(self, transaction, zone, dns_name, rtype):
         """
-        FIXME
+        Delete all records of a specific type, for a given DNS name.
         """
         if transaction and self.sql_delete_rrset:
             await transaction.sql(self.sql_delete_rrset,
@@ -117,7 +130,9 @@ class Server:
 
     async def delete_from_rrset(self, transaction, zone, dns_name, rtype, rdata):
         """
-        FIXME
+        Delete all records of a specific type matching the given data,
+        for a given DNS name. Note that for SRV and MX records, the
+        priority, port and weight are not included (ignored).
         """
         if transaction and self.sql_delete_from_rrset:
             await transaction.sql(self.sql_delete_from_rrset,
@@ -131,7 +146,7 @@ class Server:
     async def add_to_rrset(self,
             transaction, zone, dns_name, rtype, ttl, i1, i2, i3, rdata):
         """
-        FIXME
+        Add records of a specific type, to a given DNS name.
         """
         if transaction and self.sql_add_to_rrset:
             await transaction.sql(self.sql_add_to_rrset,

@@ -61,7 +61,7 @@ class AsyncHttpApiServer:
                 raise ValueError('Missing required parameter: %s' % p)
 
         dns_name = obj['dns_name']
-        if dns_name != zone and not dns_name.endswith('.'+zone):
+        if not self.duppy.is_in_zone(zone, dns_name):
             raise ValueError('Not in zone %s: %s' % (zone, dns_name))
 
         if 'ttl' not in require and 'ttl' not in obj:

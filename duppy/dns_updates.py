@@ -166,7 +166,7 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
                 for upd in msg.up:
                     qclass = {255: 'ANY', 254: 'NONE', 1: 'zone'}[upd.qclass]
 
-                    if not (upd.name.endswith('.'+zone) or upd.name == zone):
+                    if not duppy.is_in_zone(zone, upd.name):
                         raise UpdateRejected(
                             'Not in zone %s: %s' % (zone, upd.name))
 
