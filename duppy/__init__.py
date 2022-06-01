@@ -25,6 +25,7 @@ class Server:
     upstream_dns = None
     log_level    = logging.INFO
     minimum_ttl  = 120
+    def_ddns_ttl = 300
 
     # Database settings
     sql_db_driver   = None

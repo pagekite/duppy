@@ -1,3 +1,4 @@
+import base64
 import json.decoder
 import logging
 import re
@@ -57,7 +58,7 @@ class AsyncHttpApiServer:
                 raise ValueError('Unrecognized parameter: %s' % p)
         for p in require:
             if not obj.get(p):
-                raise ValueError('Missing reqired parameter: %s' % p)
+                raise ValueError('Missing required parameter: %s' % p)
 
         dns_name = obj['dns_name']
         if dns_name != zone and not dns_name.endswith('.'+zone):
@@ -120,7 +121,6 @@ class AsyncHttpApiServer:
     def _add_AAAARecord(self, zone, obj):
         try:
             dns_name, rtype, ttl, data = self._common_args(zone, obj)
-            dns_name, ttl, data = self._common_args(zone, obj)
             dns.ipv6.inet_aton(data)
             return self._mk_add_op(
                 zone, dns_name, rtype, ttl, None, None, None, data)
@@ -188,34 +188,11 @@ class AsyncHttpApiServer:
                 raise ValueError('Unknown update: %s' % words[0])
         return ops
 
-    async def update_handler(self, request):
+    async def _do_updates(self, cli, zone, updates):
         dbT = None
-        zone = None
+        resp = None
         changes = 0
-        cli = request.remote
         try:
-            data = await request.json()
-            key = data.get('key')
-            zone = data.get('zone')
-
-            keys = await self.duppy.get_keys(zone)
-            if not keys:
-                logging.info('Rejected %s: No update keys found for %s'
-                    % (cli, zone))
-                raise PermissionError('DNS updates unavailable for %s' % zone)
-
-            auth = request.query.get(
-                'key', request.headers.get('Authorization', ''))
-            if auth.lower().startswith('bearer '):
-                auth = auth.split(' ', 1)[1].strip()
-            else:
-                auth = auth.replace(' ', '+').strip()  # Escaping is hard, yo
-            if not auth or auth not in keys:
-                logging.info('Rejected %s: No valid keys provided for %s'
-                    % (cli, zone))
-                raise PermissionError('Invalid DNS update key for %s' % zone)
-
-            updates = data.get('updates')
             if (not isinstance(updates, list)
                     or len(updates) < 1
                     or not isinstance(updates[0], dict)):
@@ -246,16 +223,9 @@ class AsyncHttpApiServer:
         except ValueError as e:
             resp = web.json_response({'error': str(e)})
             resp.set_status(400, 'Bad request')
-        except PermissionError as e:
-            resp = web.json_response({'error': str(e)})
-            resp.set_status(403, 'Access denied')
-        except json.decoder.JSONDecodeError:
-            resp = web.json_response({'error': 'Invalid JSON'})
+        except (json.decoder.JSONDecodeError, KeyError):
+            resp = web.json_response({'error': 'Invalid request'})
             resp.set_status(400, 'Bad request')
-        except:
-            logging.exception('Failed to parse')
-            resp = web.json_response({'error': True})
-            resp.set_status(500, 'Internal error')
         finally:
             if dbT is not None:
                 await self.duppy.transaction_rollback(
@@ -263,11 +233,113 @@ class AsyncHttpApiServer:
 
         return resp
 
+    async def update_handler(self, request):
+        cli = request.remote
+        zone = None
+        try:
+            data = await request.json()
+            zone = data.get('zone')
+
+            keys = await self.duppy.get_keys(zone)
+            if not keys:
+                logging.info('Rejected %s: No update keys found for %s'
+                    % (cli, zone))
+                raise PermissionError('DNS updates unavailable for %s' % zone)
+
+            auth = data.get('key',
+                request.query.get('key',
+                request.headers.get('Authorization', '')))
+            if auth.lower().startswith('bearer '):
+                auth = auth.split(' ', 1)[1].strip()
+            else:
+                auth = auth.replace(' ', '+').strip()  # Escaping is hard, yo
+            if not auth or auth not in keys:
+                logging.info('Rejected %s: No valid keys provided for %s'
+                    % (cli, zone))
+                raise PermissionError('Invalid DNS update key for %s' % zone)
+
+            resp = await self._do_updates(cli, zone, data.get('updates'))
+
+        except PermissionError as e:
+            resp = web.json_response({'error': str(e)})
+            resp.set_status(403, 'Access denied')
+        except:
+            logging.exception('Failed to parse')
+            resp = web.json_response({'error': True})
+            resp.set_status(500, 'Internal error')
+
+        return resp
+
+    async def simple_handler(self, request):
+        """
+        Simple updates: GET https://u:p@SERVER/simple/?hostname=...&myip=...
+
+        The username should be the zone, and the password is the update key.
+        """
+        cli = request.remote
+        zone = None
+        try:
+            auth = request.headers.get('Authorization', '')
+            if not auth.lower().startswith('basic '):
+                raise PermissionError('Please authenticate with zone and key')
+            auth = str(base64.b64decode(auth.split(' ', 1)[1]), 'utf-8')
+            zone, auth = auth.split(':', 1)
+
+            keys = await self.duppy.get_keys(zone)
+            if not keys:
+                logging.info('Rejected %s: No update keys found for %s'
+                    % (cli, zone))
+                raise PermissionError('DNS updates unavailable for %s' % zone)
+
+            if not auth or auth not in keys:
+                logging.info('Rejected %s: No valid keys provided for %s'
+                    % (cli, zone))
+                raise PermissionError('Invalid DNS update key for %s' % zone)
+
+            myips = request.query.get('myip', 'missing').split(',')
+            myipv6 = request.query.get('myipv6', '').split(',')
+            if not (myipv6 and myipv6[0]):
+                myipv6 = [ip for ip in myips if ':' in ip]
+            myips = [ip for ip in myips if (':' not in ip) and ip]
+            hostnames = request.query.get('hostname', '').split(',')
+            ttl = request.query.get('ttl', self.duppy.def_ddns_ttl)
+            if request.query.get('offline'):
+                myips = myipv6 = []
+
+            updates = []
+            for dns_name in hostnames:
+                for rtype, iplist in (('A', myips), ('AAAA', myipv6)):
+                    for ip in iplist:
+                        updates.append({
+                            'op': 'add',
+                            'dns_name': dns_name,
+                            'ttl': ttl,
+                            'type': rtype,
+                            'data': ip})
+                    if not iplist:
+                        updates.append({
+                            'op': 'delete',
+                            'dns_name': dns_name,
+                            'type': rtype})
+
+            print('%s' % updates)
+            resp = await self._do_updates(cli, zone, updates)
+
+        except PermissionError as e:
+            resp = web.json_response({'error': str(e)})
+            resp.set_status(403, 'Access denied')
+        except:
+            logging.exception('Failed to parse')
+            resp = web.json_response({'error': True})
+            resp.set_status(500, 'Internal error')
+
+        return resp
+
     async def run(self):
         app = web.Application()
         app.add_routes([
             web.get('/', self.root_handler),
-            # FIXME: Add handlers for old fashioned dynamic-DNS IP updates
+            web.get('/simple', self.simple_handler),
             web.post('/update_dns', self.update_handler)])
 
         runner = web.AppRunner(app)
