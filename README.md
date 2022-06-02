@@ -6,7 +6,8 @@ a simple HTTP API for performing dynamic DNS updates.
 
 The intended audience for this software are DNS service providers
 who store customer DNS data in a custom database, using something
-like [bind's DLZ](https://kb.isc.org/docs/aa-00995).
+like [bind's DLZ](https://kb.isc.org/docs/aa-00995). Writing some
+code and/or SQL statements is required.
 
 
 ## Project Status

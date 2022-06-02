@@ -19,6 +19,8 @@ class Server:
     # App settings, defaults
     listen_on    = '0.0.0.0'
     http_port    = 5380
+    http_updates = True
+    http_simple  = True
     rfc2136_port = 8053
     rfc2136_tcp  = True
     rfc2136_udp  = True

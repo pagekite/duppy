@@ -35,10 +35,12 @@ class AsyncHttpApiServer:
     updating DNS records</a>.
   </p>
   <ul>
-    <li><a href="https://github.com/pagekite/duppy/wiki/HTTP_API">HTTP API</a>
-        updates are: <b>enabled</b>
-    <li><a href="https://datatracker.ietf.org/doc/html/rfc2136">RFC2136</a>
-        updates are: <b>%s</b>
+    <li><a href="https://github.com/pagekite/duppy/wiki/HTTP_API">HTTP
+        update API</a> is: <b>%s</b></li>
+    <li><a href="https://github.com/pagekite/duppy/wiki/HTTP_Simple">Simple
+        HTTP updates</a> are: <b>%s</b></li>
+    <li><a href="https://datatracker.ietf.org/doc/html/rfc2136">RFC2136
+        updates</a> are: <b>%s</b></li>
   </ul>
   <p>
     Check your provider's documentation, or the
@@ -47,6 +49,8 @@ class AsyncHttpApiServer:
     from your provider before you can make use of this service.</a>.
   </p>
 </div></body></html>""" % (
+            'enabled' if self.duppy.http_updates else 'disabled',
+            'enabled' if self.duppy.http_simple else 'disabled',
             'enabled' if self.duppy.rfc2136_port else 'disabled'))
 
     def _common_args(self, zone, obj,
@@ -350,12 +354,14 @@ class AsyncHttpApiServer:
         return resp
 
     async def run(self):
-        app = web.Application()
-        app.add_routes([
-            web.get('/', self.root_handler),
-            web.get('/simple', self.simple_handler),
-            web.post('/update_dns', self.update_handler)])
+        routes = [web.get('/', self.root_handler)]
+        if self.duppy.http_simple:
+            routes.append(web.get('/simple', self.simple_handler))
+        if self.duppy.http_updates:
+            routes.append(web.post('/update_dns', self.update_handler))
 
+        app = web.Application()
+        app.add_routes(routes)
         runner = web.AppRunner(app)
         await runner.setup()
 
