@@ -190,7 +190,6 @@ class AsyncHttpApiServer:
 
     async def _do_updates(self, cli, zone, updates):
         dbT = None
-        resp = None
         changes = 0
         try:
             if (not isinstance(updates, list)
@@ -215,23 +214,19 @@ class AsyncHttpApiServer:
                 ok = await self.duppy.notify_changed(dbT, zone) and ok
 
             if ok and await self.duppy.transaction_commit(dbT, zone):
-                resp = web.json_response(results)
                 dbT = None
+                return (200, 'OK', results)
             else:
                 raise Exception('Internal Error')
 
         except ValueError as e:
-            resp = web.json_response({'error': str(e)})
-            resp.set_status(400, 'Bad request')
+            return (400, 'Bad request', {'error': str(e)})
         except (json.decoder.JSONDecodeError, KeyError):
-            resp = web.json_response({'error': 'Invalid request'})
-            resp.set_status(400, 'Bad request')
+            return (400, 'Bad request', {'error': 'Invalid request'})
         finally:
             if dbT is not None:
                 await self.duppy.transaction_rollback(
                     dbT, zone, silent=(not changes))
-
-        return resp
 
     async def update_handler(self, request):
         cli = request.remote
@@ -258,7 +253,9 @@ class AsyncHttpApiServer:
                     % (cli, zone))
                 raise PermissionError('Invalid DNS update key for %s' % zone)
 
-            resp = await self._do_updates(cli, zone, data.get('updates'))
+            c, m, j = await self._do_updates(cli, zone, data.get('updates'))
+            resp = web.json_response(j)
+            resp.set_status(c, m)
 
         except PermissionError as e:
             resp = web.json_response({'error': str(e)})
@@ -323,15 +320,32 @@ class AsyncHttpApiServer:
                             'type': rtype})
 
             print('%s' % updates)
-            resp = await self._do_updates(cli, zone, updates)
+            c, m, j = await self._do_updates(cli, zone, updates)
 
         except PermissionError as e:
-            resp = web.json_response({'error': str(e)})
-            resp.set_status(403, 'Access denied')
+            c, m, j = 403, 'Access denied', {'error': str(e)}
         except:
             logging.exception('Failed to parse')
-            resp = web.json_response({'error': True})
-            resp.set_status(500, 'Internal error')
+            c, m, j = 500, 'Internal error', {'error': True}
+
+        if c == 200:
+            hostnames = ['-']
+            responses = []
+            for status, op in j:
+                if status == 'ok' and op['op'] == 'add':
+                    if op['dns_name'] != hostnames[-1]:
+                        hostnames.append(op['dns_name'])
+                        responses.append('good %s' % op['data'])
+                    else:
+                        responses[-1] += ',%s' % op['data']
+            resp = web.Response(text='\n'.join(responses) + '\n')
+        elif c == 403:
+            resp = web.Response(text='badauth\n')
+        else:
+            # FIXME: This is dumb, it conflates both invalid input and
+            #        errors on our side. The HTTP status code differentiates.
+            resp = web.Response(text='911\n')
+        resp.set_status(c, m)
 
         return resp
 
