@@ -19,6 +19,8 @@ class Server:
     # App settings, defaults
     listen_on    = '0.0.0.0'
     http_port    = 5380
+    http_prefix  = '/dnsup'
+    http_welcome = True
     http_updates = True
     http_simple  = True
     rfc2136_port = 8053
@@ -183,19 +185,26 @@ class Server:
 
     async def get_dns_server_tasks(self):
         """
-        Subclasses can override this to return their own DNS server task.
+        Subclasses can override this to return their own list of DNS
+        server tasks.
         """
         from . import dns_updates
         return await dns_updates.AsyncDnsUpdateServer(self)
 
     async def get_http_server_tasks(self):
         """
-        Subclasses can override this to return their own HTTP server task.
+        Subclasses can override this to return their own list of HTTP
+        server tasks.
         """
         from . import http_updates
         return [await http_updates.AsyncHttpApiServer(self).run()]
 
     async def main(self):
+        """
+        Main async task: runs `self.startup_tasks()`, configures and
+        launches the servers, and awaits their completion (they probably
+        run forever).
+        """
         await self.startup_tasks()
 
         tasks = []

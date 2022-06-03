@@ -13,6 +13,9 @@ from aiohttp import web
 
 class AsyncHttpApiServer:
     def __init__(self, duppy):
+        self.app = None
+        self.site = None
+        self.runner = None
         self.duppy = duppy
         self._rtype_to_add_op = {
             'A':     self._add_ARecord,
@@ -22,11 +25,34 @@ class AsyncHttpApiServer:
             'SRV':   self._add_SRVRecord,
             'TXT':   self._add_TXTRecord}
 
-    async def root_handler(self, request):
+    def _path_update(self):
+        return self.duppy.http_prefix + '/v1/update'
+
+    def _path_simple(self):
+        return self.duppy.http_prefix + '/v1/simple'
+
+    async def welcome_handler(self, request):
+        """
+        This handler generates a helpful, human-readable summary of
+        the Duppy server configuration: what is enabled, URL paths,
+        ports, links to documentation.
+
+        This handler is configured as the root page of the built-in
+        website/webapp.
+
+        Set `duppy.Server.http_welcome = False` to disable.
+        """
+        dns_port = self.duppy.rfc2136_port
         return web.Response(content_type='text/html', text="""\
 <html><head>
   <title>duppy: dynamic DNS update service</title>
-  <style type='text/css'>.c {max-width: 40em; margin: 0 auto;}</style>
+  <style type='text/css'>
+    .c {max-width: 50em; margin: 0 auto; font: 14px monospace;}
+    table {margin-left: 1em; border: 0; font-size: 12px;}
+    td {padding: 0 1em;}
+    hr {margin: 2.5em 0 0.5em 0;}
+    p, table, pre {margin-left: 1em;}
+  </style>
 </head><body><div class=c>
   <h1>Dynamic DNS Update Service</h1>
   <p>
@@ -34,24 +60,45 @@ class AsyncHttpApiServer:
     for <a href="https://en.wikipedia.org/wiki/Dynamic_DNS">dynamically
     updating DNS records</a>.
   </p>
-  <ul>
-    <li><a href="https://github.com/pagekite/duppy/wiki/HTTP_API">HTTP
-        update API</a> is: <b>%s</b></li>
-    <li><a href="https://github.com/pagekite/duppy/wiki/HTTP_Simple">Simple
-        HTTP updates</a> are: <b>%s</b></li>
-    <li><a href="https://datatracker.ietf.org/doc/html/rfc2136">RFC2136
-        updates</a> are: <b>%s</b></li>
-  </ul>
+  <table><tr>
+    <td><a href="#simple">Simple HTTP updates</a></td><td>%s</td><td>%s</td>
+  </tr><tr>
+    <td><a href="#update">HTTP API updates</a></td><td>%s<td>%s</td>
+  </tr><tr>
+    <td><a href="https://datatracker.ietf.org/doc/html/rfc2136">RFC2136
+        updates</a></td><td>%s</td><td>%s</td>
+  </tr></table>
   <p>
     Check your provider's documentation, or the
     <a href="https://github.com/pagekite/duppy/wiki">the duppy Wiki</a> for
-    more information. You will need to obtain an access token / secret key
+    more information.
+  </p>
+  <p>
+    You will need to obtain an access token / secret key
     from your provider before you can make use of this service.</a>.
   </p>
+  <hr>
+  %s
 </div></body></html>""" % (
-            'enabled' if self.duppy.http_updates else 'disabled',
-            'enabled' if self.duppy.http_simple else 'disabled',
-            'enabled' if self.duppy.rfc2136_port else 'disabled'))
+            '<b>enabled</b>' if self.duppy.http_simple else 'disabled',
+            ('HTTP GET <a href="%s">%s</a>' % (self._path_simple(), self._path_simple())) if self.duppy.http_simple else '',
+            '<b>enabled</b>' if self.duppy.http_updates else 'disabled',
+            ('HTTP POST <a href="%s">%s</a>' % (self._path_update(), self._path_update())) if self.duppy.http_updates else '',
+            '<b>enabled</b>' if dns_port else 'disabled',
+            ('DNS on port %d' % dns_port) if dns_port else '',
+            '<hr>'.join(self._documentation(request))))
+
+    def _documentation(self, request):
+        def fmt(a, txt):
+            h2, body  = txt.strip().replace('\n        ', '\n').split('\n', 1)
+            body = body.replace(
+               '/PREFIX', self.duppy.http_prefix).replace(
+               'SERVER/', request.headers.get('Host', 'SERVER') + '/')
+            return '<a name="%s"></a><h2>%s</h2><pre>%s</pre>' % (a, h2, body)
+        if self.duppy.http_simple:
+            yield fmt('simple', self.simple_handler.__doc__)
+        if self.duppy.http_updates:
+            yield fmt('update', self.update_handler.__doc__)
 
     def _common_args(self, zone, obj,
             require=('dns_name', 'data', 'ttl', 'type'),
@@ -233,6 +280,51 @@ class AsyncHttpApiServer:
                     dbT, zone, silent=(not changes))
 
     async def update_handler(self, request):
+        """
+        HTTP API updates:
+
+            POST https://SERVER/PREFIX/v1/update
+
+        The posted data must be JSON, looking something like this:
+
+            {
+                "zone": "example.org",
+                "key": "+fnQhoAij/FNM0yCANXkKnxZCNIL7XI2yYRJokvTn+U=",
+                "updates": [
+                    {
+                        "dns_name": "example.org",
+                        "op": "delete",
+                        "type": "MX"
+                    },
+                    {
+                        "dns_name": "example.org",
+                        "op": "add",
+                        "type": "MX",
+                        "priority": 10,
+                        "data": "mail.example.org"
+                    },
+                        ...
+                ]
+            }
+
+
+        Supported ops are `delete` and `add`. The most common record
+        types (A, AAAA, CNAME, MX, SRV, TXT) are supported. There can be
+        as many update operations as you need, but all must apply to DNS
+        names within the same zone.
+
+        MX additions require the extra paramter `priority`, SRV requires
+        `priority`, `weight` and `port`, in addition to the common `data`.
+
+        When deleting, adding `type` and `data` can be used to narrow
+        the scope of the deletion.
+
+        The secret key (auth token) can alternately be provided as a
+        Bearer token in the HTTP Authorization header, or as a
+        query-string argument named `key`.
+
+        Set `duppy.Server.http_updates = False` to disable.
+        """
         cli = request.remote
         zone = None
         try:
@@ -273,9 +365,19 @@ class AsyncHttpApiServer:
 
     async def simple_handler(self, request):
         """
-        Simple updates: GET https://u:p@SERVER/simple/?hostname=...&myip=...
+        Simple updates:
 
-        The username should be the zone, and the password is the update key.
+            GET https://u:p@SERVER/PREFIX/v1/simple?hostname=...&myip=...
+
+        The username should be the zone, and the password is the
+        secret key (auth token). These should be sent using HTTP Basic
+        authentication.
+
+        Both hostname and myip can have multiple (comma separated)
+        values. IPv4 and IPv6 addresses are both supported. Responses
+        are appropriate HTTP status codes and a plain/text summary.
+
+        Set `duppy.Server.http_simple = False` to disable.
         """
         cli = request.remote
         zone = None
@@ -354,19 +456,30 @@ class AsyncHttpApiServer:
         return resp
 
     async def run(self):
-        routes = [web.get('/', self.root_handler)]
+        """
+        Configure the server and return a ready-to-run asyncio task.
+
+        Sets `self.app`, `self.runner` and `self.site` as one might expect
+        for an aiohttp server, which subclasses could make use of.
+        """
+        routes = []
+        if self.duppy.http_welcome:
+            routes.append(web.get('/', self.welcome_handler))
         if self.duppy.http_simple:
-            routes.append(web.get('/simple', self.simple_handler))
+            routes.append(
+                web.get(self._path_simple(), self.simple_handler))
         if self.duppy.http_updates:
-            routes.append(web.post('/update_dns', self.update_handler))
+            routes.append(
+                web.post(self._path_update(), self.update_handler))
 
-        app = web.Application()
-        app.add_routes(routes)
-        runner = web.AppRunner(app)
-        await runner.setup()
+        self.app = web.Application()
+        self.app.add_routes(routes)
+        self.runner = web.AppRunner(self.app)
+        await self.runner.setup()
 
-        site = web.TCPSite(runner, self.duppy.listen_on, self.duppy.http_port)
+        self.site = web.TCPSite(
+            self.runner, self.duppy.listen_on, self.duppy.http_port)
         logging.debug('Starting HttpApiServer on %s:%s'
             % (self.duppy.listen_on, self.duppy.http_port))
 
-        return site.start()
+        return self.site.start()
