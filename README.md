@@ -15,6 +15,12 @@ code and/or SQL statements is required.
 [Roadmap and project status are Issue #1](https://github.com/pagekite/duppy/issues/1)
 
 
+## API Documentation
+
+The HTTP APIs are very briefly documented on the root home-page of
+the HTTP server itself,
+[a snapshot of which can be found here](doc/welcome.html).
+
 
 ## Getting started
 
