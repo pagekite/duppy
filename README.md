@@ -21,6 +21,8 @@ The HTTP APIs are very briefly documented on the root home-page of
 the HTTP server itself,
 [a snapshot of which can be found here](doc/welcome.md).
 
+You can also read them using `pydoc duppy.http_updates`.
+
 
 ## Getting started
 

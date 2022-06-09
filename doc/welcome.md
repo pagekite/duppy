@@ -1,3 +1,6 @@
+*This is an auto-generated snapshot of Duppy's welcome page. Do not edit
+this directly, and please take the IP addresses with a grain of salt!*
+
 # Dynamic DNS update service
 
 This is a [duppy](https://github.com/pagekite/duppy/) server, for
