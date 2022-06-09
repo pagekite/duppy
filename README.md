@@ -19,7 +19,7 @@ code and/or SQL statements is required.
 
 The HTTP APIs are very briefly documented on the root home-page of
 the HTTP server itself,
-[a snapshot of which can be found here](doc/welcome.html).
+[a snapshot of which can be found here](doc/welcome.md).
 
 
 ## Getting started

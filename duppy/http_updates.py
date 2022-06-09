@@ -43,7 +43,36 @@ class AsyncHttpApiServer:
         Set `duppy.Server.http_welcome = False` to disable.
         """
         dns_port = self.duppy.rfc2136_port
-        return web.Response(content_type='text/html', text="""\
+        if 'md' in request.query:
+            return web.Response(content_type='text/plain', text="""\
+# Dynamic DNS update service
+
+This is a [duppy](https://github.com/pagekite/duppy/) server, for
+[dynamically updating DNS records](https://en.wikipedia.org/wiki/Dynamic_DNS).
+
+| [Simple HTTP updates](#simple)                                   | %s | %s |
+| ---------------------------------------------------------------- | -- | -- |
+| [HTTP API updates](#update)                                      | %s | %s |
+| ---------------------------------------------------------------- | -- | -- |
+| [RFC2136 updates](https://datatracker.ietf.org/doc/html/rfc2136) | %s | %s |
+
+Check your provider's documentation, or the
+[duppy Wiki](https://github.com/pagekite/duppy/wiki) for more information.
+
+You will need to obtain an access token / secret key from your provider
+before you can make use of this service.</a>.
+
+------------------------------------------------------------------------------
+%s""" % (
+            '**enabled**' if self.duppy.http_simple else 'disabled',
+            ('HTTP GET [%s](%s)' % (self._path_simple(), self._path_simple())) if self.duppy.http_simple else '',
+            '**enabled**' if self.duppy.http_updates else 'disabled',
+            ('HTTP POST [%s](%s)' % (self._path_update(), self._path_update())) if self.duppy.http_updates else '',
+            '**enabled**' if dns_port else 'disabled',
+            ('DNS on port %d' % dns_port) if dns_port else '',
+            '\n\n---------\n\n'.join(self._documentation(request, md=True))))
+        else:
+            return web.Response(content_type='text/html', text="""\
 <html><head>
   <title>duppy: dynamic DNS update service</title>
   <style type='text/css'>
@@ -78,8 +107,7 @@ class AsyncHttpApiServer:
     from your provider before you can make use of this service.</a>.
   </p>
   <hr>
-  %s
-</div></body></html>""" % (
+%s</div></body></html>""" % (
             '<b>enabled</b>' if self.duppy.http_simple else 'disabled',
             ('HTTP GET <a href="%s">%s</a>' % (self._path_simple(), self._path_simple())) if self.duppy.http_simple else '',
             '<b>enabled</b>' if self.duppy.http_updates else 'disabled',
@@ -88,17 +116,26 @@ class AsyncHttpApiServer:
             ('DNS on port %d' % dns_port) if dns_port else '',
             '<hr>'.join(self._documentation(request))))
 
-    def _documentation(self, request):
-        def fmt(a, txt):
+    def _documentation(self, request, md=False):
+        def fmt1(a, txt):
             h2, body  = txt.strip().replace('\n        ', '\n').split('\n', 1)
             body = body.replace(
                '/PREFIX', self.duppy.http_prefix).replace(
                'SERVER/', request.headers.get('Host', 'SERVER') + '/')
-            return '<a name="%s"></a><h2>%s</h2><pre>%s</pre>' % (a, h2, body)
+            return h2, body
+
+        def fmt_md(a, txt):
+            h2, body = fmt1(a, txt)
+            return '\n<a name="%s"></a>\n\n## %s\n\n%s\n' % (a, h2, body)
+        def fmt_html(a, txt):
+            h2, body = fmt1(a, txt)
+            return '<a name="%s"></a>\n<h2>%s</h2>\n<pre>%s</pre>\n' % (a, h2, body)
+
+        f = fmt_md if md else fmt_html
         if self.duppy.http_simple:
-            yield fmt('simple', self.simple_handler.__doc__)
+            yield f('simple', self.simple_handler.__doc__)
         if self.duppy.http_updates:
-            yield fmt('update', self.update_handler.__doc__)
+            yield f('update', self.update_handler.__doc__)
 
     def _common_args(self, zone, obj,
             require=('dns_name', 'data', 'ttl', 'type'),
@@ -323,6 +360,8 @@ class AsyncHttpApiServer:
         Bearer token in the HTTP Authorization header, or as a
         query-string argument named `key`.
 
+        FIXME: Discuss returned values
+
         Set `duppy.Server.http_updates = False` to disable.
         """
         cli = request.remote
@@ -374,8 +413,12 @@ class AsyncHttpApiServer:
         authentication.
 
         Both hostname and myip can have multiple (comma separated)
-        values. IPv4 and IPv6 addresses are both supported. Responses
-        are appropriate HTTP status codes and a plain/text summary.
+        values. IPv4 and IPv6 addresses are both supported.
+
+        FIXME: Discuss returned values
+
+        Responses are appropriate HTTP status codes and a plain/text
+        summary.
 
         Set `duppy.Server.http_simple = False` to disable.
         """
