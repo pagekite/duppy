@@ -3,6 +3,8 @@
 This is a [duppy](https://github.com/pagekite/duppy/) server, for
 [dynamically updating DNS records](https://en.wikipedia.org/wiki/Dynamic_DNS).
 
+| Service                                                | status | protocol |
+| ------------------------------------------------------ | ------ | -------- |
 | [Simple HTTP updates](#simple)                                   | **enabled** | HTTP GET [/dnsup/v1/simple](/dnsup/v1/simple) |
 | [HTTP API updates](#update)                                      | **enabled** | HTTP POST [/dnsup/v1/update](/dnsup/v1/update) |
 | [RFC2136 updates](https://datatracker.ietf.org/doc/html/rfc2136) | **enabled** | DNS on port 8053 |

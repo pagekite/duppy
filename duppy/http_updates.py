@@ -50,6 +50,8 @@ class AsyncHttpApiServer:
 This is a [duppy](https://github.com/pagekite/duppy/) server, for
 [dynamically updating DNS records](https://en.wikipedia.org/wiki/Dynamic_DNS).
 
+| Service                                                | status | protocol |
+| ------------------------------------------------------ | ------ | -------- |
 | [Simple HTTP updates](#simple)                                   | %s | %s |
 | [HTTP API updates](#update)                                      | %s | %s |
 | [RFC2136 updates](https://datatracker.ietf.org/doc/html/rfc2136) | %s | %s |
