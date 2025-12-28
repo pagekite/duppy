@@ -14,7 +14,7 @@ async-dns==2.0.0
     # via -r requirements.in
 attrs==25.4.0
     # via aiohttp
-dnspython==2.2.1
+dnspython==2.8.0
     # via -r requirements.in
 frozenlist==1.8.0
     # via
