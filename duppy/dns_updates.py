@@ -13,6 +13,7 @@ from async_dns.core.record import rdata_map, A_RData, AAAA_RData
 # Sadly, async_dns does not currently support TSIG, so we need this
 # for validation and generation of correctly signed replies.
 import dns.message
+import dns.rdatatype
 import dns.tsigkeyring
 
 
@@ -72,7 +73,7 @@ def response(msg, keys, code=2):
 async def validate_hmac(msg, raw_data, cli, rargs):
     # Make sure there are some TSIGs, otherwise the validator
     # below will happily parse the request as valid!
-    if len([r for r in msg.ar if r.qtype == 250]) < 1:
+    if len([r for r in msg.ar if r.qtype == dns.rdatatype.TSIG]) < 1:
         logging.debug(
             'Rejected %s: Failed to validate HMAC. No TSIG records found!'
             % cli)
