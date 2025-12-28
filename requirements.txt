@@ -4,17 +4,15 @@
 #
 #    pip-compile --output-file=requirements.txt requirements.in
 #
-aiohttp==3.8.1
+aiohappyeyeballs==2.6.1
+    # via aiohttp
+aiohttp==3.13.2
     # via -r requirements.in
 aiosignal==1.4.0
     # via aiohttp
 async-dns==2.0.0
     # via -r requirements.in
-async-timeout==4.0.3
-    # via aiohttp
 attrs==25.4.0
-    # via aiohttp
-charset-normalizer==2.1.1
     # via aiohttp
 dnspython==2.2.1
     # via -r requirements.in
@@ -29,6 +27,8 @@ multidict==6.7.0
     #   aiohttp
     #   yarl
 propcache==0.4.1
-    # via yarl
+    # via
+    #   aiohttp
+    #   yarl
 yarl==1.22.0
     # via aiohttp
