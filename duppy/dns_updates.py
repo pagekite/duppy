@@ -1,31 +1,17 @@
 import asyncio
-import base64
 import logging
 import socket
-import struct
-import time
-
-from typing import List, Tuple, Union
 
 import async_dns.server
 from async_dns.core import CacheNode, DNSMessage, types
 from async_dns.server import logger, TCPHandler, DNSDatagramProtocol
-from async_dns.server.serve import *
+from async_dns.server.serve import Host, get_server_hosts, get_url_items, repr_urls, start_server
 from async_dns.resolver import BaseResolver, ProxyResolver
-from async_dns.core.record import (
-    rdata_map,
-    SOA_RData,
-    A_RData,
-    AAAA_RData,
-    MX_RData,
-    SRV_RData,
-    TXT_RData,
-    CNAME_RData)
+from async_dns.core.record import rdata_map, A_RData
 
 
 # Sadly, async_dns does not currently support TSIG, so we need this
 # for validation and generation of correctly signed replies.
-import dns.tsig
 import dns.message
 import dns.tsigkeyring
 
