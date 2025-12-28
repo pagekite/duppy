@@ -7,7 +7,7 @@ from async_dns.core import CacheNode, DNSMessage, types
 from async_dns.server import logger, TCPHandler, DNSDatagramProtocol
 from async_dns.server.serve import Host, get_server_hosts, get_url_items, repr_urls, start_server
 from async_dns.resolver import BaseResolver, ProxyResolver
-from async_dns.core.record import rdata_map, A_RData
+from async_dns.core.record import rdata_map, A_RData, AAAA_RData
 
 
 # Sadly, async_dns does not currently support TSIG, so we need this
@@ -35,6 +35,16 @@ class Patched_A_RData(A_RData):
     def load(cls, data: bytes, l: int, size: int):
         if size:
             ip = socket.inet_ntoa(data[l:l + size])
+            return l + size, cls(ip)
+        else:
+            return l + size, cls('')
+
+
+class Patched_AAAA_RData(AAAA_RData):
+    @classmethod
+    def load(cls, data: bytes, l: int, size: int):
+        if size:
+            ip = socket.inet_ntop(socket.AF_INET6, data[l:l + size])
             return l + size, cls(ip)
         else:
             return l + size, cls('')
@@ -281,5 +291,6 @@ def AsyncDnsUpdateServer(duppy):
     # FIXME: monkey-patch async_dns instead of duplicating lots of code.
     async_dns.server.handle_dns = handle_nsupdate
     rdata_map[Patched_A_RData.rtype] = Patched_A_RData
+    rdata_map[Patched_AAAA_RData.rtype] = Patched_AAAA_RData
 
     return start_dns_server(duppy)
