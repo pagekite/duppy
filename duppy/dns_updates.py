@@ -13,6 +13,7 @@ from async_dns.core.record import rdata_map, A_RData, AAAA_RData
 # Sadly, async_dns does not currently support TSIG, so we need this
 # for validation and generation of correctly signed replies.
 import dns.message
+import dns.opcode
 import dns.rcode
 import dns.rdatatype
 import dns.tsigkeyring
@@ -27,9 +28,9 @@ class UpdateRejected(Exception):
 
 
 class DNSUpdateMessage(DNSMessage):
-    zd = property(lambda s: s.qd if (s.o == 5) else None)
-    pd = property(lambda s: s.an if (s.o == 5) else None)
-    up = property(lambda s: s.ns if (s.o == 5) else None)
+    zd = property(lambda s: s.qd if (s.o == dns.opcode.UPDATE) else None)
+    pd = property(lambda s: s.an if (s.o == dns.opcode.UPDATE) else None)
+    up = property(lambda s: s.ns if (s.o == dns.opcode.UPDATE) else None)
 
 
 class Patched_A_RData(A_RData):
