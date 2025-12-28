@@ -15,6 +15,7 @@ from async_dns.core.record import rdata_map, A_RData, AAAA_RData
 import dns.message
 import dns.opcode
 import dns.rcode
+import dns.rdataclass
 import dns.rdatatype
 import dns.tsigkeyring
 
@@ -163,13 +164,13 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
                 #        avoid duplicate effort and divergent behavior.
 
                 for upd in msg.up:
-                    qclass = {255: 'ANY', 254: 'NONE', 1: 'zone'}[upd.qclass]
+                    qclass = dns.rdataclass.to_text(upd.qclass)
 
                     if not duppy.is_in_zone(zone, upd.name):
                         raise UpdateRejected(
                             'Not in zone %s: %s' % (zone, upd.name))
 
-                    if (qclass == 'zone') and (upd.ttl < duppy.minimum_ttl):
+                    if (qclass == 'IN') and (upd.ttl < duppy.minimum_ttl):
                         raise UpdateRejected('TTL too low: %d < %d'
                             % (upd.ttl, duppy.minimum_ttl))
 
@@ -216,7 +217,7 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
                         logging.info('%s: delete_from_rrset%s' % (cli, args))
                         ok = await duppy.delete_from_rrset(dbT, *args)
 
-                    elif qclass == 'zone':
+                    elif qclass == 'IN':
                         args = (zone, upd.name, qtype, upd.ttl, p1, p2, p3, data)
                         logging.info('%s: add_to_rrset%s' % (cli, args))
                         # FIXME: We need to delete_rrset or delete_from_rrset
