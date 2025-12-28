@@ -13,6 +13,7 @@ from async_dns.core.record import rdata_map, A_RData, AAAA_RData
 # Sadly, async_dns does not currently support TSIG, so we need this
 # for validation and generation of correctly signed replies.
 import dns.message
+import dns.rcode
 import dns.rdatatype
 import dns.tsigkeyring
 
@@ -59,7 +60,7 @@ class NsUpdateResolver(ProxyResolver):
         self.duppy = duppy
 
 
-def response(msg, keys, code=2):
+def response(msg, keys, code=dns.rcode.SERVFAIL):
     if isinstance(msg, DNSMessage):
         return DNSMessage(qr=1, o=msg.o, qid=msg.qid, aa=0, r=code).pack()
     elif isinstance(msg, dns.message.Message):
@@ -130,15 +131,15 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
                     yield r
             else:
                 logging.debug('Rejected %s: non-update query' % cli)
-                yield response(*rargs, code=4)
+                yield response(*rargs, code=dns.rcode.NOTIMP)
 
         elif (len(msg.zd) != 1) or (msg.zd[0].qtype != types.SOA):
             logging.debug('Rejected %s: update Zone section is invalid' % cli)
-            yield response(*rargs, code=1)
+            yield response(*rargs, code=dns.rcode.FORMERR)
 
         elif msg.pd:
             logging.info('Rejected %s: FIXME: prereqs do not work' % cli)
-            yield response(*rargs, code=4)
+            yield response(*rargs, code=dns.rcode.NOTIMP)
 
         else:
             zone = msg.zd[0].name.lower()
@@ -146,12 +147,12 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
             if not keys:
                 logging.info('Rejected %s: No update keys found for %s'
                     % (cli, zone))
-                yield response(*rargs, code=9)
+                yield response(*rargs, code=dns.rcode.NOTAUTH)
 
             # Note: Here be magic, validate_hmac will as a side-effect
             #       change rargs so responses from here on get signed.
             elif not await validate_hmac(msg, data, cli, rargs):
-                yield response(*rargs, code=5)
+                yield response(*rargs, code=dns.rcode.REFUSED)
 
             else:
                 updates = []
@@ -235,21 +236,21 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
 
                 if ok:
                     if await duppy.transaction_commit(dbT, zone):
-                        yield response(*rargs, code=0)  # NOERROR
+                        yield response(*rargs, code=dns.rcode.NOERROR)
                     else:
-                        yield response(*rargs, code=2)  # SERVFAIL
+                        yield response(*rargs, code=dns.rcode.SERVFAIL)
                     dbT = None
                 else:
                     # Rollback happens finally (below)
-                    yield response(*rargs, code=2)  # SERVFAIL
+                    yield response(*rargs, code=dns.rcode.SERVFAIL)
 
     except UpdateRejected as e:
         logging.info('Rejected %s: %s' % (cli, e))
-        yield response(*rargs, code=4)
+        yield response(*rargs, code=dns.rcode.NOTIMP)
 
     except:
         logging.exception('Rejected %s: Internal error' % cli)
-        yield response(*rargs, code=2)  # SERVFAIL
+        yield response(*rargs, code=dns.rcode.SERVFAIL)
 
     finally:
         if dbT is not None:
