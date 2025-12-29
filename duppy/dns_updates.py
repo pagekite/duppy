@@ -34,12 +34,13 @@ def response(msg, code=dns.rcode.SERVFAIL):
 
 async def handle_nsupdate(duppy, data, addr):
     '''Handle DNS Update requests'''
+    backend = duppy.backend
     dbT = None
     msg = None
     cli = addr[0]
     changes = 0
     try:
-        keyring = dns.tsigkeyring.from_text(await duppy.get_all_keys())
+        keyring = dns.tsigkeyring.from_text(await backend.get_all_keys())
         msg = dns.message.from_wire(data, keyring=keyring)
         if msg.opcode() == dns.opcode.QUERY:
             msg: dns.update.QueryMessage = msg
@@ -53,10 +54,10 @@ async def handle_nsupdate(duppy, data, addr):
                 # This happens with nsupdate, if people do not specify a zone.
                 # Without the zone, nsupdate sends SOA queries to guess it.
                 question = msg.question[0]
-                for _, zone in (await duppy.get_all_zones()).items():
+                for _, zone in (await backend.get_all_zones()).items():
                     if zone.get('type') and dns.rdatatype.from_text(zone.get('type')) != question.rdtype:
                         continue
-                    if await duppy.is_in_zone(zone["name"], question.name.to_text(omit_final_dot=True)):
+                    if await backend.is_in_zone(zone["name"], question.name.to_text(omit_final_dot=True)):
                         res = dns.message.make_response(msg)
                         res.flags |= dns.flags.AA
                         soa_data = dns.rdtypes.ANY.SOA.SOA(
@@ -84,7 +85,7 @@ async def handle_nsupdate(duppy, data, addr):
             msg: dns.update.UpdateMessage = msg
             zone = msg.zone[0].name
             # section 0 (zone)
-            if not msg.had_tsig or not await duppy.check_key_in_zone(msg.keyname.to_text(omit_final_dot=True), msg.zone[0].name.to_text(omit_final_dot=True)):
+            if not msg.had_tsig or not await backend.check_key_in_zone(msg.keyname.to_text(omit_final_dot=True), msg.zone[0].name.to_text(omit_final_dot=True)):
                 yield response(msg, code=dns.rcode.REFUSED)
             # section 1 (prerequisite)
             elif msg.prerequisite:
@@ -99,7 +100,7 @@ async def handle_nsupdate(duppy, data, addr):
                 updates = []
                 for upd in msg.update:
                     upd: dns.rrset.RRset = upd
-                    if not await duppy.is_in_zone(zone.to_text(), upd.name.to_text()):
+                    if not await backend.is_in_zone(zone.to_text(), upd.name.to_text()):
                         raise UpdateRejected(
                             'Not in zone %s: %s' % (zone.to_text(), upd.name.to_text()))
 
@@ -147,7 +148,7 @@ async def handle_nsupdate(duppy, data, addr):
                     updates.append((upd, p1, p2, p3, data))
 
                 zone = msg.zone[0].name.to_text(omit_final_dot=True).lower()
-                dbT = await duppy.transaction_start(zone)
+                dbT = await backend.transaction_start(zone)
                 ok = 0
                 for upd, p1, p2, p3, data in updates:
                     name = upd.name.to_text(omit_final_dot=True).lower()
@@ -158,22 +159,22 @@ async def handle_nsupdate(duppy, data, addr):
                     if deleting is None:
                         args = (zone, name, rdtype, ttl, p1, p2, p3, data)
                         logging.info('%s: add_to_rrset%s' % (cli, args))
-                        ok = await duppy.add_to_rrset(dbT, *args)
+                        ok = await backend.add_to_rrset(dbT, *args)
 
                     elif deleting == rdtype == 'ANY':
                         args = (zone, name)
                         logging.info('%s: delete_all_rrsets%s' % (cli, args))
-                        ok = await duppy.delete_all_rrsets(dbT, *args)
+                        ok = await backend.delete_all_rrsets(dbT, *args)
 
                     elif deleting == 'ANY' and rdtype != 'ANY':
                         args = (zone, name, rdtype)
                         logging.info('%s: delete_rrset%s' % (cli, args))
-                        ok = await duppy.delete_rrset(dbT, *args)
+                        ok = await backend.delete_rrset(dbT, *args)
 
                     elif deleting == 'NONE':
                         args = (zone, name, rdtype, data)
                         logging.info('%s: delete_from_rrset%s' % (cli, args))
-                        ok = await duppy.delete_from_rrset(dbT, *args)
+                        ok = await backend.delete_from_rrset(dbT, *args)
 
                     else:
                         ok = False
@@ -184,10 +185,10 @@ async def handle_nsupdate(duppy, data, addr):
                         break
 
                 if changes:
-                    ok = await duppy.notify_changed(dbT, zone) and ok
+                    ok = await backend.notify_changed(dbT, zone) and ok
 
                 if ok:
-                    if await duppy.transaction_commit(dbT, zone):
+                    if await backend.transaction_commit(dbT, zone):
                         yield response(msg, code=dns.rcode.NOERROR)
                     else:
                         yield response(msg, code=dns.rcode.SERVFAIL)
@@ -214,7 +215,7 @@ async def handle_nsupdate(duppy, data, addr):
 
     finally:
         if dbT is not None:
-            await duppy.transaction_rollback(dbT, zone, silent=(not changes))
+            await backend.transaction_rollback(dbT, zone, silent=(not changes))
 
 
 class TCPHandler:

@@ -13,6 +13,7 @@ from aiohttp import web
 
 class AsyncHttpApiServer:
     def __init__(self, duppy):
+        self.backend = duppy.backend
         self.app = None
         self.site = None
         self.runner = None
@@ -152,7 +153,7 @@ before you can make use of this service.</a>.
                 raise ValueError('Missing required parameter: %s' % p)
 
         dns_name = obj['dns_name']
-        if not await self.duppy.is_in_zone(zone, dns_name):
+        if not await self.backend.is_in_zone(zone, dns_name):
             raise ValueError('Not in zone %s: %s' % (zone, dns_name))
 
         if 'ttl' not in require and 'ttl' not in obj:
@@ -175,7 +176,7 @@ before you can make use of this service.</a>.
             # FIXME: We need to delete_rrset or delete_from_rrset
             #        to ensure we do not end up with duplicate
             #        records; which depends on the rtype.
-            return self.duppy.add_to_rrset(dbT, *args)
+            return self.backend.add_to_rrset(dbT, *args)
         return _op
 
     async def _mk_delete_op(self, zone, obj):
@@ -190,13 +191,13 @@ before you can make use of this service.</a>.
             args = [zone, dns_name, rtype, data]
             if rtype is None:
                 logging.info('%s: delete_all_rrsets%s' % (cli, args[:2]))
-                return self.duppy.delete_all_rrsets(dbT, *args[:2])
+                return self.backend.delete_all_rrsets(dbT, *args[:2])
             elif data is None:
                 logging.info('%s: delete_rrset%s' % (cli, args[:3]))
-                return self.duppy.delete_rrset(dbT, *args[:3])
+                return self.backend.delete_rrset(dbT, *args[:3])
             else:
                 logging.info('%s: delete_from_rrset%s' % (cli, args[:4]))
-                return self.duppy.delete_from_rrset(dbT, *args[:4])
+                return self.backend.delete_from_rrset(dbT, *args[:4])
         return _op
 
 
@@ -289,7 +290,7 @@ before you can make use of this service.</a>.
                 raise ValueError('Need a list of updates')
 
             ops = await self._updates_to_ops(zone, updates)
-            dbT = await self.duppy.transaction_start(zone)
+            dbT = await self.backend.transaction_start(zone)
             ok = True
             results = []
             for req, op in ops:
@@ -302,9 +303,9 @@ before you can make use of this service.</a>.
                     break
 
             if changes:
-                ok = await self.duppy.notify_changed(dbT, zone) and ok
+                ok = await self.backend.notify_changed(dbT, zone) and ok
 
-            if ok and await self.duppy.transaction_commit(dbT, zone):
+            if ok and await self.backend.transaction_commit(dbT, zone):
                 dbT = None
                 return (200, 'OK', results)
             else:
@@ -316,7 +317,7 @@ before you can make use of this service.</a>.
             return (400, 'Bad request', {'error': 'Invalid request'})
         finally:
             if dbT is not None:
-                await self.duppy.transaction_rollback(
+                await self.backend.transaction_rollback(
                     dbT, zone, silent=(not changes))
 
     async def update_handler(self, request):
@@ -373,7 +374,7 @@ before you can make use of this service.</a>.
             data = await request.json()
             zone = data.get('zone')
 
-            keys = await self.duppy.get_keys(zone)
+            keys = await self.backend.get_keys(zone)
             if not keys:
                 logging.info('Rejected %s: No update keys found for %s'
                     % (cli, zone))
@@ -434,7 +435,7 @@ before you can make use of this service.</a>.
             auth = str(base64.b64decode(auth.split(' ', 1)[1]), 'utf-8')
             zone, auth = auth.split(':', 1)
 
-            keys = await self.duppy.get_keys(zone)
+            keys = await self.backend.get_keys(zone)
             if not keys:
                 logging.info('Rejected %s: No update keys found for %s'
                     % (cli, zone))

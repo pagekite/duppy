@@ -38,14 +38,6 @@ class MyServer(duppy.Server):
     log_level    = logging.INFO
     minimum_ttl  = 120
 
-    # Database settings
-    sql_db_driver   = 'sqlite3'      # 'aiopg', 'aiomysql' or None
-    sql_db_database = '/tmp/duppy-test.sq3'
-    # Unused here, but you might need:
-    sql_db_host     = None
-    sql_db_username = None
-    sql_db_password = None
-
     # Database operations; set any of these to None to disable the operation.
     sql_get_all_zones = """
         SELECT name, hostname, type, ttl, i1 AS serial, i2, i3, data
@@ -105,6 +97,22 @@ class MyServer(duppy.Server):
          WHERE zone = %(zone)s
            AND type = 'SOA'
         """
+
+    def __init__(self):
+        backend = duppy.backends.SQLiteBackend(
+            '/tmp/duppy-test.sq3',
+            queries={
+                "sql_get_all_keys": self.sql_get_all_keys,
+                "sql_get_all_zones": self.sql_get_all_zones,
+                "sql_get_keys": self.sql_get_keys,
+                "sql_delete_all_rrsets": self.sql_delete_all_rrsets,
+                "sql_delete_rrset": self.sql_delete_rrset,
+                "sql_delete_from_rrset": self.sql_delete_from_rrset,
+                "sql_add_to_rrset": self.sql_add_to_rrset,
+                "sql_notify_changed": self.sql_notify_changed,
+            }
+        )
+        super().__init__(backend)
 
     async def startup_tasks(self):
         # This defines some test tables to play with. Delete this!

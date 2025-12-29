@@ -31,19 +31,7 @@ TEST_ZONES = {
 MOCK_ZONE = []
 
 
-class MockServer(duppy.Server):
-
-    # App settings
-    listen_on = '127.0.0.2'
-
-    # No database, we're writing our own Python code!
-    sql_db_driver = None
-
-    # We don't support transactions, so we don't implement these
-    #   - transaction_start
-    #   - transaction_commit
-    #   - transaction_rollback
-
+class MockBackend(duppy.backends.Backend):
     async def get_all_zones(self):
         return {zone: {"name": zone, "hostname": zone} for zone in TEST_ZONES.keys()}
 
@@ -92,6 +80,15 @@ class MockServer(duppy.Server):
         print('%s' % '\n'.join('%s' % rr for rr in MOCK_ZONE))
         print('***')
         return True
+
+
+class MockServer(duppy.Server):
+    # App settings
+    listen_on = '127.0.0.2'
+
+    def __init__(self):
+        backend = MockBackend()
+        super().__init__(backend)
 
 
 try:
