@@ -57,6 +57,9 @@ class MockServer(duppy.Server):
             logging.debug("Zone %s unavailable for updates" % zone)
             return []
 
+    async def check_key_in_zone(self, key, zone):
+        return key in TEST_ZONES[zone]
+
     async def delete_all_rrsets(self, dbT, zone, dns_name):
         global MOCK_ZONE
         MOCK_ZONE = [rr for rr in MOCK_ZONE if rr[0] == dns_name]

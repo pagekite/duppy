@@ -133,6 +133,13 @@ class Server:
             }
         return []
 
+    async def check_key_in_zone(self, key, zone):
+        """
+        Check if a key is present in a zone.
+        """
+        keys = await self.get_keys(zone)
+        return key in keys
+
     async def delete_all_rrsets(self, transaction, zone, dns_name):
         """
         Delete all records for a given DNS name.
