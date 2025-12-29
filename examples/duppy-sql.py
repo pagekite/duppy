@@ -54,25 +54,25 @@ class MyServer(duppy.Server):
         WHERE zk.zone = %(zone)s
         """
     sql_delete_all_rrsets = """
-        DELETE FROM zone_data
+        DELETE FROM zones
               WHERE hostname = %(dns_name)s
                 AND zone = %(zone)s
         """
     sql_delete_rrset = """
-        DELETE FROM zone_data
+        DELETE FROM zones
               WHERE hostname = %(dns_name)s
                 AND type = %(rtype)s
                 AND zone = %(zone)s
         """
     sql_delete_from_rrset = """
-        DELETE FROM zone_data
+        DELETE FROM zones
               WHERE hostname = %(dns_name)s
                 AND type = %(rtype)s
                 AND data = %(rdata)s
                 AND zone = %(zone)s
         """
     sql_add_to_rrset = """
-        INSERT INTO zone_data (zone, hostname, type, ttl, i1, i2, i3, data)
+        INSERT INTO zones (zone, hostname, type, ttl, i1, i2, i3, data)
               VALUES (%(zone)s,
                       %(dns_name)s,
                       %(rtype)s,
@@ -92,7 +92,7 @@ class MyServer(duppy.Server):
     # example of that in `examples/duppy-mock.py`.
     #
     sql_notify_changed = """
-        UPDATE zone_data
+        UPDATE zones
            SET i1 = ((i1 + 1) % 4294967295) + 1
          WHERE zone = %(zone)s
            AND type = 'SOA'
@@ -105,13 +105,13 @@ class MyServer(duppy.Server):
         try:
             await dbT.sql("""CREATE TABLE keys (name, key)""")
             await dbT.sql("""CREATE TABLE zone_keys (zone, key_name)""")
-            await dbT.sql("""CREATE TABLE zone_data (zone, hostname, type, ttl, i1, i2, i3, data)""")
+            await dbT.sql("""CREATE TABLE zones (zone, hostname, type, ttl, i1, i2, i3, data)""")
         except sqlite3.OperationalError:
             pass
 
         await dbT.sql("""DELETE FROM keys""")
         await dbT.sql("""DELETE FROM zone_keys""")
-        await dbT.sql("""DELETE FROM zone_data""")
+        await dbT.sql("""DELETE FROM zones""")
         for key_name, key in TEST_KEYS.items():
             await dbT.sql("""
                 INSERT INTO keys (name, key)
@@ -124,7 +124,7 @@ class MyServer(duppy.Server):
                             VALUES (%(zone)s, %(key_name)s)
                     """, zone=zone, key_name=key_name)
             await dbT.sql("""
-                INSERT INTO zone_data (zone, hostname, type, ttl, i1)
+                INSERT INTO zones (zone, hostname, type, ttl, i1)
                      VALUES (%(zone)s, %(zone)s, 'SOA', 3600, 1)
                 """, zone=zone)
 
