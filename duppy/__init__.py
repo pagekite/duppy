@@ -1,7 +1,11 @@
 import asyncio
 import logging
+import typing
 
-from . import backends
+from .backends import Backend, SQLBackend
+from .frontends import Frontend
+from .dns_frontend import DnsFrontend
+from .http_frontend import HttpFrontend
 
 
 class Server:
@@ -10,22 +14,10 @@ class Server:
     this to adapt the server to your local setup.
     """
 
-    # App settings, defaults
-    listen_on    = '0.0.0.0'
-    http_port    = 5380
-    http_prefix  = '/dnsup'
-    http_welcome = True
-    http_updates = True
-    http_simple  = True
-    rfc2136_port = 8053
-    rfc2136_tcp  = True
-    rfc2136_udp  = True
-    log_level    = logging.INFO
-    minimum_ttl  = 120
-    def_ddns_ttl = 300
-
-    def __init__(self, backend: backends.Backend):
+    def __init__(self, frontends: typing.Iterable[Frontend], backend: Backend, log_level: int = logging.INFO):
+        self.frontends = frontends
         self.backend = backend
+        self.log_level = log_level
 
     async def startup_tasks(self):
         """
@@ -34,22 +26,6 @@ class Server:
         have started running.
         """
         pass
-
-    async def get_dns_server_tasks(self):
-        """
-        Subclasses can override this to return their own list of DNS
-        server tasks.
-        """
-        from . import dns_updates
-        return await dns_updates.AsyncDnsUpdateServer(self)
-
-    async def get_http_server_tasks(self):
-        """
-        Subclasses can override this to return their own list of HTTP
-        server tasks.
-        """
-        from . import http_updates
-        return [asyncio.create_task(await http_updates.AsyncHttpApiServer(self).run())]
 
     async def main(self):
         """
@@ -60,12 +36,8 @@ class Server:
         await self.startup_tasks()
 
         tasks = []
-        if self.rfc2136_port:
-            tasks.extend(await self.get_dns_server_tasks())
-        if self.http_port:
-            tasks.extend(await self.get_http_server_tasks())
-
-        logging.debug('%s' % tasks)
+        for frontend in self.frontends:
+            tasks.extend(await frontend.get_tasks())
         await asyncio.wait(tasks)
 
     def run(self):

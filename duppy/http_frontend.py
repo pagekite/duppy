@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json.decoder
 import logging
@@ -9,15 +10,43 @@ import dns.ttl
 
 from aiohttp import web
 
+from . import frontends
 
 
-class AsyncHttpApiServer:
-    def __init__(self, duppy):
-        self.backend = duppy.backend
+class HttpFrontend(frontends.Frontend):
+    hostname: str
+    port: int
+    http_prefix: str
+    default_ttl: int
+    minimum_ttl: int
+    http_welcome: bool
+    http_updates: bool
+    http_simple: bool
+
+    def __init__(
+            self,
+            backend,
+            hostname = '0.0.0.0',
+            port = 5380,
+            prefix = '/dnsup',
+            default_ttl = 300,
+            minimum_ttl = 120,
+            welcome = True,
+            updates = True,
+            simple = True,
+    ):
+        self.hostname = hostname
+        self.port = port
+        self.http_prefix  = prefix
+        self.default_ttl = default_ttl
+        self.minimum_ttl = minimum_ttl
+        self.http_welcome = welcome
+        self.http_updates = updates
+        self.http_simple  = simple
+
         self.app = None
         self.site = None
         self.runner = None
-        self.duppy = duppy
         self._rtype_to_add_op = {
             'A':     self._add_ARecord,
             'AAAA':  self._add_AAAARecord,
@@ -26,11 +55,13 @@ class AsyncHttpApiServer:
             'SRV':   self._add_SRVRecord,
             'TXT':   self._add_TXTRecord}
 
+        super().__init__(backend)
+
     def _path_update(self):
-        return self.duppy.http_prefix + '/v1/update'
+        return self.http_prefix + '/v1/update'
 
     def _path_simple(self):
-        return self.duppy.http_prefix + '/v1/simple'
+        return self.http_prefix + '/v1/simple'
 
     async def welcome_handler(self, request):
         """
@@ -54,12 +85,6 @@ this directly, and please take the IP addresses with a grain of salt!*
 This is a [duppy](https://github.com/pagekite/duppy/) server, for
 [dynamically updating DNS records](https://en.wikipedia.org/wiki/Dynamic_DNS).
 
-| Service                                                | status | protocol |
-| ------------------------------------------------------ | ------ | -------- |
-| [Simple HTTP updates](#simple)                                   | %s | %s |
-| [HTTP API updates](#update)                                      | %s | %s |
-| [RFC2136 updates](https://datatracker.ietf.org/doc/html/rfc2136) | %s | %s |
-
 Check your provider's documentation, or the
 [duppy Wiki](https://github.com/pagekite/duppy/wiki) for more information.
 
@@ -67,14 +92,7 @@ You will need to obtain an access token / secret key from your provider
 before you can make use of this service.</a>.
 
 ------------------------------------------------------------------------------
-%s""" % (
-            '**enabled**' if self.duppy.http_simple else 'disabled',
-            ('HTTP GET [%s](%s)' % (self._path_simple(), self._path_simple())) if self.duppy.http_simple else '',
-            '**enabled**' if self.duppy.http_updates else 'disabled',
-            ('HTTP POST [%s](%s)' % (self._path_update(), self._path_update())) if self.duppy.http_updates else '',
-            '**enabled**' if dns_port else 'disabled',
-            ('DNS on port %d' % dns_port) if dns_port else '',
-            '\n\n---------\n\n'.join(self._documentation(request, md=True))))
+%s""" % ('\n\n---------\n\n'.join(self._documentation(request, md=True))))
         else:
             return web.Response(content_type='text/html', text="""\
 <html><head>
@@ -93,14 +111,6 @@ before you can make use of this service.</a>.
     for <a href="https://en.wikipedia.org/wiki/Dynamic_DNS">dynamically
     updating DNS records</a>.
   </p>
-  <table><tr>
-    <td><a href="#simple">Simple HTTP updates</a></td><td>%s</td><td>%s</td>
-  </tr><tr>
-    <td><a href="#update">HTTP API updates</a></td><td>%s<td>%s</td>
-  </tr><tr>
-    <td><a href="https://datatracker.ietf.org/doc/html/rfc2136">RFC2136
-        updates</a></td><td>%s</td><td>%s</td>
-  </tr></table>
   <p>
     Check your provider's documentation, or the
     <a href="https://github.com/pagekite/duppy/wiki">the duppy Wiki</a> for
@@ -111,20 +121,13 @@ before you can make use of this service.</a>.
     from your provider before you can make use of this service.</a>.
   </p>
   <hr>
-%s</div></body></html>""" % (
-            '<b>enabled</b>' if self.duppy.http_simple else 'disabled',
-            ('HTTP GET <a href="%s">%s</a>' % (self._path_simple(), self._path_simple())) if self.duppy.http_simple else '',
-            '<b>enabled</b>' if self.duppy.http_updates else 'disabled',
-            ('HTTP POST <a href="%s">%s</a>' % (self._path_update(), self._path_update())) if self.duppy.http_updates else '',
-            '<b>enabled</b>' if dns_port else 'disabled',
-            ('DNS on port %d' % dns_port) if dns_port else '',
-            '<hr>'.join(self._documentation(request))))
+%s</div></body></html>""" % ('<hr>'.join(self._documentation(request))))
 
     def _documentation(self, request, md=False):
         def fmt1(a, txt):
             h2, body  = txt.strip().replace('\n        ', '\n').split('\n', 1)
             body = body.replace(
-               '/PREFIX', self.duppy.http_prefix).replace(
+               '/PREFIX', self.http_prefix).replace(
                'SERVER/', request.headers.get('Host', 'SERVER') + '/')
             return h2, body
 
@@ -136,9 +139,9 @@ before you can make use of this service.</a>.
             return '<a name="%s"></a>\n<h2>%s</h2>\n<pre>%s</pre>\n' % (a, h2, body)
 
         f = fmt_md if md else fmt_html
-        if self.duppy.http_simple:
+        if self.http_simple:
             yield f('simple', self.simple_handler.__doc__)
-        if self.duppy.http_updates:
+        if self.http_updates:
             yield f('update', self.update_handler.__doc__)
 
     async def _common_args(self, zone, obj,
@@ -163,9 +166,9 @@ before you can make use of this service.</a>.
                 ttl = dns.ttl.from_text('%s' % obj['ttl'])
             except (KeyError, ValueError, dns.ttl.BadTTL):
                 raise ValueError('TTL missing or invalid')
-            if ttl < self.duppy.minimum_ttl:
+            if ttl < self.minimum_ttl:
                 raise ValueError('TTL is too low, %s < %s'
-                    % (ttl, self.duppy.minimum_ttl))
+                    % (ttl, self.minimum_ttl))
 
         return dns_name, obj.get('type'), ttl, obj.get('data')
 
@@ -452,7 +455,7 @@ before you can make use of this service.</a>.
                 myipv6 = [ip for ip in myips if ':' in ip]
             myips = [ip for ip in myips if (':' not in ip) and ip]
             hostnames = request.query.get('hostname', '').split(',')
-            ttl = request.query.get('ttl', self.duppy.def_ddns_ttl)
+            ttl = request.query.get('ttl', self.default_ttl)
             if request.query.get('offline'):
                 myips = myipv6 = []
 
@@ -510,12 +513,12 @@ before you can make use of this service.</a>.
         for an aiohttp server, which subclasses could make use of.
         """
         routes = []
-        if self.duppy.http_welcome:
+        if self.http_welcome:
             routes.append(web.get('/', self.welcome_handler))
-        if self.duppy.http_simple:
+        if self.http_simple:
             routes.append(
                 web.get(self._path_simple(), self.simple_handler))
-        if self.duppy.http_updates:
+        if self.http_updates:
             routes.append(
                 web.post(self._path_update(), self.update_handler))
 
@@ -525,8 +528,11 @@ before you can make use of this service.</a>.
         await self.runner.setup()
 
         self.site = web.TCPSite(
-            self.runner, self.duppy.listen_on, self.duppy.http_port)
+            self.runner, self.hostname, self.port)
         logging.debug('Starting HttpApiServer on %s:%s'
-            % (self.duppy.listen_on, self.duppy.http_port))
+            % (self.hostname, self.port))
 
         return self.site.start()
+
+    async def get_tasks(self):
+        return [asyncio.create_task(await self.run())]

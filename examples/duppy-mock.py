@@ -88,7 +88,11 @@ class MockServer(duppy.Server):
 
     def __init__(self):
         backend = MockBackend()
-        super().__init__(backend)
+        frontends = [
+            duppy.DnsFrontend(backend, hostname=self.listen_on),
+            duppy.HttpFrontend(backend, hostname=self.listen_on),
+        ]
+        super().__init__(frontends, backend)
 
 
 try:

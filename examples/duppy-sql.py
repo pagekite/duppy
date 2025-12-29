@@ -31,8 +31,8 @@ class MyServer(duppy.Server):
 
     # App settings
     listen_on    = '127.0.0.2'
-    http_port    = 5380       # Set to None to disable the HTTP server
-    rfc2136_port = 8053       # Set to None to disable the RFC2136 server
+    http_port    = 5380
+    rfc2136_port = 8053
 
     # Miscellaneous settings.
     log_level    = logging.INFO
@@ -99,7 +99,7 @@ class MyServer(duppy.Server):
         """
 
     def __init__(self):
-        backend = duppy.backends.SQLiteBackend(
+        backend = duppy.SQLiteBackend(
             '/tmp/duppy-test.sq3',
             queries={
                 "sql_get_all_keys": self.sql_get_all_keys,
@@ -112,7 +112,11 @@ class MyServer(duppy.Server):
                 "sql_notify_changed": self.sql_notify_changed,
             }
         )
-        super().__init__(backend)
+        frontends = [
+            duppy.DnsFrontend(backend, hostname=self.listen_on, port=self.rfc2136_port),
+            duppy.HttpFrontend(backend, hostname=self.listen_on, port=self.http_port),
+        ]
+        super().__init__(frontends, backend)
 
     async def startup_tasks(self):
         # This defines some test tables to play with. Delete this!

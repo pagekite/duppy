@@ -19,6 +19,8 @@ import dns.rrset
 import dns.tsigkeyring
 import dns.update
 
+from . import frontends
+
 
 class UpdateRejected(Exception):
     pass
@@ -32,9 +34,9 @@ def response(msg, code=dns.rcode.SERVFAIL):
     return response.to_wire()
 
 
-async def handle_nsupdate(duppy, data, addr):
+async def handle_nsupdate(frontend, data, addr):
     '''Handle DNS Update requests'''
-    backend = duppy.backend
+    backend = frontend.backend
     dbT = None
     msg = None
     cli = addr[0]
@@ -66,7 +68,7 @@ async def handle_nsupdate(duppy, data, addr):
                             mname=dns.name.from_text(zone["hostname"]),
                             rname=dns.name.from_text(''),
                             serial=zone.get('serial', 0),
-                            refresh=zone.get('ttl', 3600),
+                            refresh=zone.get('ttl', frontend.default_ttl),
                             retry=0,
                             expire=0,
                             minimum=0
@@ -105,9 +107,9 @@ async def handle_nsupdate(duppy, data, addr):
                             'Not in zone %s: %s' % (zone.to_text(), upd.name.to_text()))
 
                     if upd.deleting is None:
-                        if upd.ttl < duppy.minimum_ttl:
+                        if upd.ttl < frontend.minimum_ttl:
                             raise UpdateRejected('TTL too low: %d < %d'
-                                % (upd.ttl, duppy.minimum_ttl))
+                                % (upd.ttl, frontend.minimum_ttl))
                     else:
                         if upd.ttl != 0:
                             raise dns.exception.FormError(f"Invalid TTL {upd.ttl} for deletion update")
@@ -219,8 +221,8 @@ async def handle_nsupdate(duppy, data, addr):
 
 
 class TCPHandler:
-    def __init__(self, duppy):
-        self.duppy = duppy
+    def __init__(self, frontend):
+        self.frontend = frontend
 
     async def handle_tcp(self, reader, writer):
         addr = writer.transport.get_extra_info('peername')
@@ -230,16 +232,16 @@ class TCPHandler:
             except asyncio.IncompleteReadError:
                 break
             data = await reader.readexactly(size)
-            async for result in handle_nsupdate(self.duppy, data, addr):
+            async for result in handle_nsupdate(self.frontend, data, addr):
                 bsize = struct.pack('!H', len(result))
                 writer.write(bsize)
                 writer.write(result)
 
 
 class DatagramProtocol(asyncio.DatagramProtocol):
-    def __init__(self, duppy):
+    def __init__(self, frontend):
         super().__init__()
-        self.duppy = duppy
+        self.frontend = frontend
 
     def connection_made(self, transport):
         self.transport = transport
@@ -248,40 +250,58 @@ class DatagramProtocol(asyncio.DatagramProtocol):
         asyncio.ensure_future(self.handle(data, addr))
 
     async def handle(self, data, addr):
-        async for result in handle_nsupdate(self.duppy, data, addr):
+        async for result in handle_nsupdate(self.frontend, data, addr):
             self.transport.sendto(result, addr)
 
 
-async def start_dns_server(duppy):
-    '''Start a DNS server.'''
+class DnsFrontend(frontends.Frontend):
+    hostname: str
+    port: int
+    enable_tcp: bool
+    enable_udp: bool
+    default_ttl: int
+    minimum_ttl: int
 
-    hostname = duppy.listen_on
-    port = duppy.rfc2136_port
-    urls = []
-    tasks = []
-    if duppy.rfc2136_tcp:
-        server = await asyncio.start_server(TCPHandler(duppy).handle_tcp, hostname, port)
-        for sock in server.sockets:
-            host = sock.getsockname()
-            urls.append(f"tcp://{host[0]}:{host[1]}")
-        tasks.append(asyncio.create_task(server.serve_forever()))
+    def __init__(
+            self,
+            backend,
+            hostname = '0.0.0.0',
+            port = 8053,
+            enable_tcp = True,
+            enable_udp = True,
+            default_ttl = 300,
+            minimum_ttl = 120,
+    ):
+        self.hostname = hostname
+        self.port = port
+        self.enable_tcp = enable_tcp
+        self.enable_udp  = enable_udp
+        self.default_ttl = default_ttl
+        self.minimum_ttl = minimum_ttl
+        super().__init__(backend)
 
-    if duppy.rfc2136_udp:
-        loop = asyncio.get_event_loop()
-        transport, _protocol = await loop.create_datagram_endpoint(
-            lambda: DatagramProtocol(duppy),
-            local_addr=(hostname, port))
-        host = transport.get_extra_info('sockname')
-        urls.append(f"udp://{host[0]}:{host[1]}")
+    async def get_tasks(self):
+        urls = []
+        tasks = []
+        if self.enable_tcp:
+            server = await asyncio.start_server(TCPHandler(self).handle_tcp, self.hostname, self.port)
+            for sock in server.sockets:
+                host = sock.getsockname()
+                urls.append(f"tcp://{host[0]}:{host[1]}")
+            tasks.append(asyncio.create_task(server.serve_forever()))
 
-    logging.info('====================')
-    for url in urls:
-        logging.info('%s', url)
-    logging.info('====================')
+        if self.enable_udp:
+            loop = asyncio.get_event_loop()
+            transport, _protocol = await loop.create_datagram_endpoint(
+                lambda: DatagramProtocol(self),
+                local_addr=(self.hostname, self.port))
+            host = transport.get_extra_info('sockname')
+            urls.append(f"udp://{host[0]}:{host[1]}")
 
-    logging.info('Servers started')
-    return tasks
+        logging.info('====================')
+        for url in urls:
+            logging.info('%s', url)
+        logging.info('====================')
 
-
-def AsyncDnsUpdateServer(duppy):
-    return start_dns_server(duppy)
+        logging.info('Servers started')
+        return tasks
