@@ -3,7 +3,7 @@ import logging
 import socket
 
 import async_dns.server
-from async_dns.core import CacheNode, DNSMessage, types
+from async_dns.core import DNSMessage, types
 from async_dns.server import logger, TCPHandler, DNSDatagramProtocol
 from async_dns.server.serve import Host, get_server_hosts, get_url_items, repr_urls, start_server
 from async_dns.resolver import BaseResolver, ProxyResolver
@@ -113,14 +113,53 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
         if msg.zd is None:
             # This happens with nsupdate, if people do not specify a zone.
             # Without the zone, nsupdate sends SOA queries to guess it.
-            if duppy.upstream_dns:
-                logging.debug('Proxying %s: non-update query' % cli)
-                async for r in org_server_handle_dns(
-                        resolver, data, addr, protocol):
-                    yield r
-            else:
-                logging.debug('Rejected %s: non-update query' % cli)
+            # Load all keys in order to correctly sign responses.
+            keyring = dns.tsigkeyring.from_text(await duppy.get_all_keys())
+            msg: dns.update.QueryMessage = dns.message.from_wire(data, keyring=keyring)
+            # So this is weird magic: here we change our response args
+            # to include the dns.message.Message, so we can
+            # use dnspython to generate signed replies.
+            rargs[0] = msg
+            if msg.opcode() != dns.opcode.QUERY:
+                logging.info('Rejected %s: Operation not supported %s' % (cli, dns.opcode.to_text(msg.o)))
                 yield response(*rargs, code=dns.rcode.NOTIMP)
+            elif len(msg.question) != 1:
+                logging.info('Only supports single question, got %d' % len(msg.question))
+                yield response(msg, code=dns.rcode.NOTIMP)
+            elif msg.question[0].rdtype != dns.rdatatype.SOA:
+                logging.info('Only supports SOA query, got %d' % dns.rdatatype.to_text(msg.qestion[0].rdtype))
+                yield response(msg, code=dns.rcode.NOTIMP)
+            else:
+                # This happens with nsupdate, if people do not specify a zone.
+                # Without the zone, nsupdate sends SOA queries to guess it.
+                question = msg.question[0]
+                for _, zone in (await duppy.get_all_zones()).items():
+                    if zone.get('type') and dns.rdatatype.from_text(zone.get('type')) != question.rdtype:
+                        continue
+                    if duppy.is_in_zone(zone["name"], question.name.to_text(omit_final_dot=True)):
+                        res = dns.message.make_response(msg)
+                        res.flags |= dns.flags.AA
+                        soa_data = dns.rdtypes.ANY.SOA.SOA(
+                            question.rdclass,
+                            question.rdtype,
+                            mname=dns.name.from_text(zone["hostname"]),
+                            rname=dns.name.from_text(''),
+                            serial=zone.get('serial', 0),
+                            refresh=zone.get('ttl', 3600),
+                            retry=0,
+                            expire=0,
+                            minimum=0
+                        )
+                        rrset = dns.rrset.from_rdata(
+                            question.name,
+                            soa_data.refresh,
+                            soa_data
+                        )
+                        res.answer.append(rrset)
+                        yield res.to_wire()
+                        break  # break to avoid going into else clause
+                else:
+                    yield response(msg, code=dns.rcode.NXDOMAIN)
 
         elif (len(msg.zd) != 1) or (msg.zd[0].qtype != types.SOA):
             logging.debug('Rejected %s: update Zone section is invalid' % cli)
@@ -249,8 +288,7 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
 async def start_dns_server(duppy):
     '''Start a DNS server.'''
 
-    resolver = NsUpdateResolver(duppy, CacheNode(),
-        proxies=[duppy.upstream_dns] if duppy.upstream_dns else [])
+    resolver = NsUpdateResolver(duppy)
 
     bind = '%s:%d' % (duppy.listen_on, duppy.rfc2136_port)
     loop = asyncio.get_event_loop()

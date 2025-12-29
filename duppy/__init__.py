@@ -26,7 +26,6 @@ class Server:
     rfc2136_port = 8053
     rfc2136_tcp  = True
     rfc2136_udp  = True
-    upstream_dns = None
     log_level    = logging.INFO
     minimum_ttl  = 120
     def_ddns_ttl = 300
@@ -39,6 +38,8 @@ class Server:
     sql_db_password = None
 
     # Database operations
+    sql_get_all_keys = None
+    sql_get_all_zones = None
     sql_get_keys = None
     sql_delete_all_rrsets = None
     sql_delete_rrset = None
@@ -98,6 +99,28 @@ class Server:
                     % (zone,))
             return False
         return True
+
+    async def get_all_zones(self):
+        if self.db and self.sql_get_all_zones:
+            return {
+                row[0]: {
+                    "zone": row[0],
+                    "hostname": row[1],
+                    "type": row[2],
+                    "ttl": row[3],
+                    "serial": row[4],
+                }
+                for row in await self.db.select(self.sql_get_all_zones)
+            }
+        return []
+
+    async def get_all_keys(self):
+        if self.db and self.sql_get_all_keys:
+            return {
+                row[0]: row[1]
+                for row in await self.db.select(self.sql_get_all_keys)
+            }
+        return []
 
     async def get_keys(self, zone):
         """

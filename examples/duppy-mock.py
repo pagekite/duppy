@@ -44,6 +44,12 @@ class MockServer(duppy.Server):
     #   - transaction_commit
     #   - transaction_rollback
 
+    async def get_all_zones(self):
+        return {zone: {"name": zone, "hostname": zone} for zone in TEST_ZONES.keys()}
+
+    async def get_all_keys(self):
+        return TEST_KEYS
+
     async def get_keys(self, zone):
         if zone in TEST_ZONES:
             return {key: TEST_KEYS[key] for key in TEST_ZONES[zone]}

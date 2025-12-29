@@ -33,7 +33,6 @@ class MyServer(duppy.Server):
     listen_on    = '127.0.0.2'
     http_port    = 5380       # Set to None to disable the HTTP server
     rfc2136_port = 8053       # Set to None to disable the RFC2136 server
-    upstream_dns = '8.8.8.8'  # Replace with the IP address of your primary DNS
 
     # Miscellaneous settings.
     log_level    = logging.INFO
@@ -48,8 +47,17 @@ class MyServer(duppy.Server):
     sql_db_password = None
 
     # Database operations; set any of these to None to disable the operation.
+    sql_get_all_zones = """
+        SELECT name, hostname, type, ttl, i1 AS serial, i2, i3, data
+        FROM zones
+        """
+    sql_get_all_keys = """
+        SELECT name, key
+        FROM keys
+        """
     sql_get_keys = """
-        SELECT k.name, k.key FROM keys AS k
+        SELECT k.name, k.key
+        FROM keys AS k
         JOIN zone_keys AS zk ON k.name = zk.key_name
         WHERE zk.zone = %(zone)s
         """
@@ -72,7 +80,7 @@ class MyServer(duppy.Server):
                 AND zone = %(zone)s
         """
     sql_add_to_rrset = """
-        INSERT INTO zones (zone, hostname, type, ttl, i1, i2, i3, data)
+        INSERT INTO zones (name, hostname, type, ttl, i1, i2, i3, data)
               VALUES (%(zone)s,
                       %(dns_name)s,
                       %(rtype)s,
@@ -105,7 +113,7 @@ class MyServer(duppy.Server):
         try:
             await dbT.sql("""CREATE TABLE keys (name, key)""")
             await dbT.sql("""CREATE TABLE zone_keys (zone, key_name)""")
-            await dbT.sql("""CREATE TABLE zones (zone, hostname, type, ttl, i1, i2, i3, data)""")
+            await dbT.sql("""CREATE TABLE zones (name, hostname, type, ttl, i1, i2, i3, data)""")
         except sqlite3.OperationalError:
             pass
 
@@ -124,7 +132,7 @@ class MyServer(duppy.Server):
                             VALUES (%(zone)s, %(key_name)s)
                     """, zone=zone, key_name=key_name)
             await dbT.sql("""
-                INSERT INTO zones (zone, hostname, type, ttl, i1)
+                INSERT INTO zones (name, hostname, type, ttl, i1)
                      VALUES (%(zone)s, %(zone)s, 'SOA', 3600, 1)
                 """, zone=zone)
 
