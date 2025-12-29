@@ -56,7 +56,7 @@ async def handle_nsupdate(duppy, data, addr):
                 for _, zone in (await duppy.get_all_zones()).items():
                     if zone.get('type') and dns.rdatatype.from_text(zone.get('type')) != question.rdtype:
                         continue
-                    if duppy.is_in_zone(zone["name"], question.name.to_text(omit_final_dot=True)):
+                    if await duppy.is_in_zone(zone["name"], question.name.to_text(omit_final_dot=True)):
                         res = dns.message.make_response(msg)
                         res.flags |= dns.flags.AA
                         soa_data = dns.rdtypes.ANY.SOA.SOA(
@@ -99,7 +99,7 @@ async def handle_nsupdate(duppy, data, addr):
                 updates = []
                 for upd in msg.update:
                     upd: dns.rrset.RRset = upd
-                    if not duppy.is_in_zone(zone.to_text(), upd.name.to_text()):
+                    if not await duppy.is_in_zone(zone.to_text(), upd.name.to_text()):
                         raise UpdateRejected(
                             'Not in zone %s: %s' % (zone.to_text(), upd.name.to_text()))
 

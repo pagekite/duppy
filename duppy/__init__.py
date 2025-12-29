@@ -57,7 +57,7 @@ class Server:
         elif self.sql_db_driver is not None:
             raise ValueError('Unknown DB driver: %s' % self.sql_db_driver)
 
-    def is_in_zone(self, zone, dns_name):
+    async def is_in_zone(self, zone, dns_name):
         """
         Returns True if the DNS name (hostname) is in the given zone, False
         otherwise.

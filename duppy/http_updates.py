@@ -140,7 +140,7 @@ before you can make use of this service.</a>.
         if self.duppy.http_updates:
             yield f('update', self.update_handler.__doc__)
 
-    def _common_args(self, zone, obj,
+    async def _common_args(self, zone, obj,
             require=('dns_name', 'data', 'ttl', 'type'),
             allowed=[]):
 
@@ -152,7 +152,7 @@ before you can make use of this service.</a>.
                 raise ValueError('Missing required parameter: %s' % p)
 
         dns_name = obj['dns_name']
-        if not self.duppy.is_in_zone(zone, dns_name):
+        if not await self.duppy.is_in_zone(zone, dns_name):
             raise ValueError('Not in zone %s: %s' % (zone, dns_name))
 
         if 'ttl' not in require and 'ttl' not in obj:
@@ -168,7 +168,7 @@ before you can make use of this service.</a>.
 
         return dns_name, obj.get('type'), ttl, obj.get('data')
 
-    def _mk_add_op(self, zone, dns_name, rtype, ttl, i1, i2, i3, data):
+    async def _mk_add_op(self, zone, dns_name, rtype, ttl, i1, i2, i3, data):
         def _op(cli, dbT):
             args = (zone, dns_name, rtype, ttl, i1, i2, i3, data)
             logging.info('%s: add_to_rrset%s' % (cli, args))
@@ -178,7 +178,7 @@ before you can make use of this service.</a>.
             return self.duppy.add_to_rrset(dbT, *args)
         return _op
 
-    def _mk_delete_op(self, zone, obj):
+    async def _mk_delete_op(self, zone, obj):
         dns_name, rtype, ttl, data = self._common_args(zone, obj,
             require=('dns_name',),
             allowed=('type', 'ttl', 'data'))
@@ -200,32 +200,32 @@ before you can make use of this service.</a>.
         return _op
 
 
-    def _add_ARecord(self, zone, obj):
+    async def _add_ARecord(self, zone, obj):
         try:
             dns_name, rtype, ttl, data = self._common_args(zone, obj)
             dns.ipv4.inet_aton(data)
-            return self._mk_add_op(
+            return await self._mk_add_op(
                 zone, dns_name, rtype, ttl, None, None, None, data)
         except dns.exception.SyntaxError:
             raise ValueError('Invalid IPv4 address: %s' % data)
 
-    def _add_AAAARecord(self, zone, obj):
+    async def _add_AAAARecord(self, zone, obj):
         try:
             dns_name, rtype, ttl, data = self._common_args(zone, obj)
             dns.ipv6.inet_aton(data)
-            return self._mk_add_op(
+            return await self._mk_add_op(
                 zone, dns_name, rtype, ttl, None, None, None, data)
         except dns.exception.SyntaxError:
             raise ValueError('Invalid IPv6 address: %s' % data)
 
-    def _add_CNAMERecord(self, zone, obj):
+    async def _add_CNAMERecord(self, zone, obj):
         dns_name, rtype, ttl, data = self._common_args(zone, obj)
         if not re.match(r'^([a-zA-Z0-9_-]+)(\.[a-zA-Z0-9_-]+)*$', data):
             raise ValueError('Invalid CNAME destination: %s' % data)
-        return self._mk_add_op(
+        return await self._mk_add_op(
             zone, dns_name, rtype, ttl, None, None, None, data)
 
-    def _add_SRVRecord(self, zone, obj):
+    async def _add_SRVRecord(self, zone, obj):
         dns_name, rtype, ttl, data = self._common_args(zone, obj,
             require=('dns_name', 'type', 'ttl',
                      'priority', 'weight', 'port', 'data'))
@@ -239,10 +239,10 @@ before you can make use of this service.</a>.
             raise ValueError('Invalid priority, weight or port')
         if not re.match(r'^([a-zA-Z0-9_-]+)(\.[a-zA-Z0-9_-]+\.)*$', data):
             raise ValueError('Invalid SRV destination: %s' % data)
-        return self._mk_add_op(
+        return await self._mk_add_op(
             zone, dns_name, rtype, ttl, pri, weight, port, data)
 
-    def _add_MXRecord(self, zone, obj):
+    async def _add_MXRecord(self, zone, obj):
         dns_name, rtype, ttl, data = self._common_args(zone, obj,
             require=('dns_name', 'type', 'ttl', 'priority', 'data'))
         try:
@@ -253,27 +253,27 @@ before you can make use of this service.</a>.
             raise ValueError('Invalid priority')
         if not re.match(r'^([a-zA-Z0-9_-]+)(\.[a-zA-Z0-9_-]+\.)*$', data):
             raise ValueError('Invalid MX destination: %s' % data)
-        return self._mk_add_op(
+        return await self._mk_add_op(
             zone, dns_name, rtype, ttl, pri, None, None, data)
 
-    def _add_TXTRecord(self, zone, obj):
+    async def _add_TXTRecord(self, zone, obj):
         dns_name, rtype, ttl, data = self._common_args(zone, obj)
-        return self._mk_add_op(
+        return await self._mk_add_op(
             zone, dns_name, rtype, ttl, None, None, None, data)
 
 
-    def _updates_to_ops(self, zone, updates):
+    async def _updates_to_ops(self, zone, updates):
         ops = []
         for update in updates:
             op = update['op']
 
             if op == 'delete':
-                ops.append((update, self._mk_delete_op(zone, update)))
+                ops.append((update, await self._mk_delete_op(zone, update)))
 
             elif op == 'add':
                 ops.append((
                     update,
-                    self._rtype_to_add_op[update['type']](zone, update)))
+                    await self._rtype_to_add_op[update['type']](zone, update)))
 
             else:
                 raise ValueError('Unknown update: %s' % words[0])
@@ -288,7 +288,7 @@ before you can make use of this service.</a>.
                     or not isinstance(updates[0], dict)):
                 raise ValueError('Need a list of updates')
 
-            ops = self._updates_to_ops(zone, updates)
+            ops = await self._updates_to_ops(zone, updates)
             dbT = await self.duppy.transaction_start(zone)
             ok = True
             results = []
