@@ -10,11 +10,20 @@ import logging
 
 
 TEST_KEYS = {
-    'example.com' : [
-        'FM4d4LDAs9jP/N8EkvhhayqtqcO4tUJzvxsPyG20fkCE7g2IizVaTdeAwudLkwvhVECo50te6gJKhoxJkqUMOA==',
-        'QlRlQTl4OA46nPX0/QEk65AECEbreeF8K7guyr5bAsk=',
-        '+fnQhoAij/FNM0yCANXkKnxZCNIL7XI2yYRJokvTn+U='],
-    'example.org' : ['+fnQhoAij/FNM0yCANXkKnxZCNIL7XI2yYRJokvTn+U='],
+    "foo": "FM4d4LDAs9jP/N8EkvhhayqtqcO4tUJzvxsPyG20fkCE7g2IizVaTdeAwudLkwvhVECo50te6gJKhoxJkqUMOA==",
+    "bar": "QlRlQTl4OA46nPX0/QEk65AECEbreeF8K7guyr5bAsk=",
+    "other": "+fnQhoAij/FNM0yCANXkKnxZCNIL7XI2yYRJokvTn+U=",
+}
+
+TEST_ZONES = {
+    "example.com": [
+        "foo",
+        "bar",
+        "other",
+    ],
+    "example.org": [
+        "other",
+    ],
 }
 
 
@@ -40,7 +49,9 @@ class MyServer(duppy.Server):
 
     # Database operations; set any of these to None to disable the operation.
     sql_get_keys = """
-        SELECT key FROM zone_keys WHERE zone = %(zone)s
+        SELECT k.name, k.key FROM keys AS k
+        JOIN zone_keys AS zk ON k.name = zk.key_name
+        WHERE zk.zone = %(zone)s
         """
     sql_delete_all_rrsets = """
         DELETE FROM zone_data
@@ -92,19 +103,26 @@ class MyServer(duppy.Server):
         import sqlite3
         dbT = await self.db.start_transaction()
         try:
-            await dbT.sql("""CREATE TABLE zone_keys (zone, key)""")
+            await dbT.sql("""CREATE TABLE keys (name, key)""")
+            await dbT.sql("""CREATE TABLE zone_keys (zone, key_name)""")
             await dbT.sql("""CREATE TABLE zone_data (zone, hostname, type, ttl, i1, i2, i3, data)""")
         except sqlite3.OperationalError:
             pass
 
+        await dbT.sql("""DELETE FROM keys""")
         await dbT.sql("""DELETE FROM zone_keys""")
         await dbT.sql("""DELETE FROM zone_data""")
-        for zone in TEST_KEYS:
-            for key in TEST_KEYS[zone]:
+        for key_name, key in TEST_KEYS.items():
+            await dbT.sql("""
+                INSERT INTO keys (name, key)
+                        VALUES (%(key_name)s, %(key)s)
+                """, key_name=key_name, key=key)
+        for zone, key_names in TEST_ZONES.items():
+            for key_name in key_names:
                 await dbT.sql("""
-                    INSERT INTO zone_keys (zone, key)
-                         VALUES (%(zone)s, %(key)s)
-                    """, zone=zone, key=key)
+                    INSERT INTO zone_keys (zone, key_name)
+                            VALUES (%(zone)s, %(key_name)s)
+                    """, zone=zone, key_name=key_name)
             await dbT.sql("""
                 INSERT INTO zone_data (zone, hostname, type, ttl, i1)
                      VALUES (%(zone)s, %(zone)s, 'SOA', 3600, 1)

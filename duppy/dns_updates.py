@@ -62,7 +62,7 @@ class NsUpdateResolver(ProxyResolver):
         self.duppy = duppy
 
 
-def response(msg, keys, code=dns.rcode.SERVFAIL):
+def response(msg, code=dns.rcode.SERVFAIL):
     if isinstance(msg, DNSMessage):
         return DNSMessage(qr=1, o=msg.o, qid=msg.qid, aa=0, r=code).pack()
     elif isinstance(msg, dns.message.Message):
@@ -73,7 +73,7 @@ def response(msg, keys, code=dns.rcode.SERVFAIL):
         return DNSMessage(qr=1, qid=0, aa=0, r=code).pack()
 
 
-async def validate_hmac(msg, raw_data, cli, rargs):
+async def validate_hmac(msg, keys, raw_data, cli, rargs):
     # Make sure there are some TSIGs, otherwise the validator
     # below will happily parse the request as valid!
     if len([r for r in msg.ar if r.qtype == dns.rdatatype.TSIG]) < 1:
@@ -82,47 +82,34 @@ async def validate_hmac(msg, raw_data, cli, rargs):
             % cli)
         return False
 
-    # Keys come from rargs, due to the hack explained below.
-    keys = rargs[1]
+    try:
+        keyring = dns.tsigkeyring.from_text(keys)
+        valid = dns.message.from_wire(raw_data, keyring)
 
-    zone = msg.zd[0].name.lower()
-    reasons = []
-    while keys:
-        secret = keys.pop(0)
-        try:
-            keyring = dns.tsigkeyring.from_text({
-                zone: secret,
-                zone+'.': secret})
-            valid = dns.message.from_wire(raw_data, keyring)
+        # So this is weird magic: here we change our response args
+        # to include the dns.message.Message, so we can
+        # use dnspython to generate signed replies.
+        rargs[0] = valid
 
-            # So this is weird magic: here we change our response args
-            # to include the dns.message.Message and keyring, so we can
-            # use dnspython to generate signed replies.
-            rargs[0] = valid
-            rargs[1] = keyring
-
-            return True
-        except Exception as e:
-            reasons.append(str(e))
-
-    logging.info(
-        'Rejected %s: Failed to validate HMAC. Tried %d key(s): %s'
-        % (cli, len(reasons), ', '.join(reasons)))
+        return True
+    except Exception as e:
+        logging.info(
+            'Rejected %s: Failed to validate HMAC. Tried %d key(s): %s'
+            % (cli, len(keys), str(e)))
     return False
 
 
 async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
     '''Handle DNS Update requests'''
     duppy = resolver.duppy
-    keys = []
     dbT = None
     msg = data
     cli = addr[0]
     changes = 0
-    rargs = [None, keys]
+    rargs = [None]
     try:
         msg = DNSUpdateMessage.parse(data)
-        rargs = [msg, keys]
+        rargs = [msg]
         if msg.zd is None:
             # This happens with nsupdate, if people do not specify a zone.
             # Without the zone, nsupdate sends SOA queries to guess it.
@@ -145,7 +132,7 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
 
         else:
             zone = msg.zd[0].name.lower()
-            keys[:] = await duppy.get_keys(zone)
+            keys = await duppy.get_keys(zone)
             if not keys:
                 logging.info('Rejected %s: No update keys found for %s'
                     % (cli, zone))
@@ -153,7 +140,7 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
 
             # Note: Here be magic, validate_hmac will as a side-effect
             #       change rargs so responses from here on get signed.
-            elif not await validate_hmac(msg, data, cli, rargs):
+            elif not await validate_hmac(msg, keys, data, cli, rargs):
                 yield response(*rargs, code=dns.rcode.REFUSED)
 
             else:

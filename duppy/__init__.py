@@ -104,9 +104,10 @@ class Server:
         Fetch the current valid keys for a given zone, as a list.
         """
         if self.db and self.sql_get_keys:
-            return [
-                row[0] for row in
-                await self.db.select(self.sql_get_keys, zone=zone)]
+            return {
+                row[0]: row[1]
+                for row in await self.db.select(self.sql_get_keys, zone=zone)
+            }
         return []
 
     async def delete_all_rrsets(self, transaction, zone, dns_name):

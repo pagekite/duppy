@@ -12,11 +12,20 @@ import logging
 
 
 TEST_KEYS = {
-    'example.com' : [
-        'FM4d4LDAs9jP/N8EkvhhayqtqcO4tUJzvxsPyG20fkCE7g2IizVaTdeAwudLkwvhVECo50te6gJKhoxJkqUMOA==',
-        'QlRlQTl4OA46nPX0/QEk65AECEbreeF8K7guyr5bAsk=',
-        '+fnQhoAij/FNM0yCANXkKnxZCNIL7XI2yYRJokvTn+U='],
-    'example.org' : ['+fnQhoAij/FNM0yCANXkKnxZCNIL7XI2yYRJokvTn+U='],
+    "foo": "FM4d4LDAs9jP/N8EkvhhayqtqcO4tUJzvxsPyG20fkCE7g2IizVaTdeAwudLkwvhVECo50te6gJKhoxJkqUMOA==",
+    "bar": "QlRlQTl4OA46nPX0/QEk65AECEbreeF8K7guyr5bAsk=",
+    "other": "+fnQhoAij/FNM0yCANXkKnxZCNIL7XI2yYRJokvTn+U=",
+}
+
+TEST_ZONES = {
+    "example.com": [
+        "foo",
+        "bar",
+        "other",
+    ],
+    "example.org": [
+        "other",
+    ],
 }
 
 MOCK_ZONE = []
@@ -36,12 +45,10 @@ class MockServer(duppy.Server):
     #   - transaction_rollback
 
     async def get_keys(self, zone):
-        while zone[-1:] == '.':
-            zone = zone[:-1]
-        if zone in TEST_KEYS:
-            return TEST_KEYS[zone]
+        if zone in TEST_ZONES:
+            return {key: TEST_KEYS[key] for key in TEST_ZONES[zone]}
         else:
-            logging.debug('Zone %s unavailable for updates' % zone)
+            logging.debug("Zone %s unavailable for updates" % zone)
             return []
 
     async def delete_all_rrsets(self, dbT, zone, dns_name):
