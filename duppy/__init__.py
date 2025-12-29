@@ -48,8 +48,6 @@ class Server:
     sql_notify_changed = None
 
     BACKENDS = {
-        'aiopg': backends.PGBackend,
-        'aiomysql': backends.MySQLBackend,
         'sqlite3': backends.SQLiteBackend}
 
     def __init__(self):

@@ -10,8 +10,8 @@ class SQLiteBackend:
     """
     This is a duppy database back-end, implemented on top of sqlite3.
 
-    It supports %(foo)s style placeholders in SQL queries (same as the
-    PostgreSQL and MySQL backends), so this can be used to test/debug
+    It supports %(foo)s style placeholders in SQL queries,
+    so this can be used to test/debug
     the SQL statements written for the other backends.
     """
     def __init__(self, duppy, nested=False):
@@ -46,34 +46,3 @@ class SQLiteBackend:
     async def select(self, query, **kwargs):
         query = self._py_to_sq3_placeholders(query)
         return self._db.execute(query, kwargs).fetchall()
-
-
-class PGBackend:
-    def __init__(self, duppy):
-        import aiopg
-        self.duppy = duppy
-
-    async def start_transaction(self):
-        logging.debug('FIXME: Start transaction, return handle?')
-        return self
-
-    async def commit(self):
-        # FIXME: This should be a transaction op
-        return True
-
-    async def rollback(self):
-        # FIXME: This should be a transaction op
-        return False
-
-    async def sql(self, query, **kwargs):
-        # FIXME: This should be a transaction op
-        pass
-
-    async def select(self, query, **kwargs):
-        return []
-
-
-class MySQLBackend(PGBackend):
-    def __init__(self, duppy):
-        import aiomysql
-        self.duppy = duppy
