@@ -26,7 +26,7 @@ class SQLiteBackend:
     async def start_transaction(self):
         if self.nested:
             raise Exception('Started a transaction within a transaction')
-        return SQLiteBackend(self.duppy, nested=self.nested)
+        return SQLiteBackend(self.duppy, nested=True)
 
     async def commit(self):
         self._db.commit()
