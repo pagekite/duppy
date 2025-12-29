@@ -2,15 +2,187 @@ import asyncio
 import base64
 import json.decoder
 import logging
-import re
 
-import dns.ipv4
-import dns.ipv6
+import dns.immutable
+import dns.name
+import dns.rdata
+import dns.rdataclass
+import dns.rdatatype
+import dns.rdtypes.ANY.CNAME
+import dns.rdtypes.ANY.MX
+import dns.rdtypes.ANY.SOA
+import dns.rdtypes.ANY.TXT
+import dns.rdtypes.IN.A
+import dns.rdtypes.IN.AAAA
+import dns.rdtypes.IN.SRV
+import dns.rrset
 import dns.ttl
 
 from aiohttp import web
 
 from . import frontends
+
+
+@dns.immutable.immutable
+class SOA(dns.rdtypes.ANY.SOA.SOA):
+    @classmethod
+    def from_json(cls, rdclass, rdtype, obj):
+        return cls(
+            rdclass,
+            rdtype,
+            mname=obj["mname"],
+            rname=obj["rname"],
+            serial=obj["serial"],
+            refresh=obj["refresh"],
+            retry=obj["retry"],
+            expire=obj["expire"],
+            minimum=obj["minimum"],
+        )
+
+
+@dns.immutable.immutable
+class A(dns.rdtypes.IN.A.A):
+    @classmethod
+    def from_json(cls, rdclass, rdtype, obj):
+        return cls(
+            rdclass,
+            rdtype,
+            address=obj["data"],
+        )
+
+    def to_args(self):
+        return None, None, None, self.address.to_text()
+
+
+@dns.immutable.immutable
+class AAAA(dns.rdtypes.IN.AAAA.AAAA):
+    @classmethod
+    def from_json(cls, rdclass, rdtype, obj):
+        return cls(
+            rdclass,
+            rdtype,
+            address=obj["data"],
+        )
+
+    def to_args(self):
+        return None, None, None, self.address.to_text()
+
+
+@dns.immutable.immutable
+class CNAME(dns.rdtypes.ANY.CNAME.CNAME):
+    @classmethod
+    def from_json(cls, rdclass, rdtype, obj):
+        return cls(
+            rdclass,
+            rdtype,
+            target=obj["data"],
+        )
+
+    def to_args(self):
+        return None, None, None, self.target.to_text()
+
+
+@dns.immutable.immutable
+class MX(dns.rdtypes.ANY.MX.MX):
+    @classmethod
+    def from_json(cls, rdclass, rdtype, obj):
+        return cls(
+            rdclass,
+            rdtype,
+            preference=obj["priority"],
+            exchange=obj["data"],
+        )
+
+    def to_args(self):
+        return self.preference, None, None, self.exchange.to_text()
+
+
+@dns.immutable.immutable
+class SRV(dns.rdtypes.IN.SRV.SRV):
+    @classmethod
+    def from_json(cls, rdclass, rdtype, obj):
+        return cls(
+            rdclass,
+            rdtype,
+            priority=obj["priority"],
+            weight=obj["weight"],
+            port=obj["port"],
+            target=obj["data"],
+        )
+
+    def to_args(self):
+        return self.priority, self.weight, self.port, self.target.to_text()
+
+
+@dns.immutable.immutable
+class TXT(dns.rdtypes.ANY.TXT.TXT):
+    @classmethod
+    def from_json(cls, rdclass, rdtype, obj):
+        return cls(
+            rdclass,
+            rdtype,
+            strings=obj["data"],
+        )
+
+    def to_args(self):
+        return None, None, None, self.strings
+
+
+# Register our extended classes to be found by dns.rdata.get_rdata_class()
+dns.rdata._rdata_classes = {
+    (dns.rdataclass.IN, dns.rdatatype.SOA): SOA,
+    (dns.rdataclass.IN, dns.rdatatype.A): A,
+    (dns.rdataclass.IN, dns.rdatatype.AAAA): AAAA,
+    (dns.rdataclass.IN, dns.rdatatype.CNAME): CNAME,
+    (dns.rdataclass.IN, dns.rdatatype.MX): MX,
+    (dns.rdataclass.IN, dns.rdatatype.SRV): SOA,
+}
+
+
+def rdata_from_json(
+    rdclass: dns.rdataclass.RdataClass | str,
+    rdtype: dns.rdatatype.RdataType | str,
+    obj: dict,
+) -> dns.rdata.Rdata:
+    rdclass = dns.rdataclass.RdataClass.make(rdclass)
+    rdtype = dns.rdatatype.RdataType.make(rdtype)
+    cls = dns.rdata.get_rdata_class(rdclass, rdtype)
+    assert cls is not None  # for type checkers
+    return cls.from_json(rdclass, rdtype, obj)
+
+
+def rrset_from_json(
+    obj: dict,
+) -> dns.rrset.RRset:
+    name = dns.name.from_text(obj["dns_name"])
+    ttl = dns.ttl.make(obj.get("ttl", 0))
+    rdclass = dns.rdataclass.IN
+    rdtype = dns.rdatatype.RdataType.make(obj.get("type", "ANY"))
+    deleting = None
+    empty = None
+    if obj["op"] == "delete":
+        # See RFC2136 Section 2.5 and dns.update.UpdateMessage._parse_rr_header()
+        if rdtype == dns.rdatatype.ANY or not obj.get("data"):
+            deleting = dns.rdataclass.ANY
+        else:
+            deleting = dns.rdataclass.NONE
+        # See dns.message._WireReader._get_section()
+        empty = deleting == dns.rdataclass.ANY
+    if empty:
+        rd = None
+    else:
+        rd: dns.rdata.Rdata = rdata_from_json(rdclass, rdtype, obj)
+    r = dns.rrset.RRset(name, rdclass, rdtype, deleting=deleting)
+    if rd is not None:
+        r.add(rd, ttl)
+    return r
+
+
+def rrset_to_args(r: dns.rrset.RRset):
+    args = [r.name.to_text(omit_final_dot=True), dns.rdatatype.to_text(r.rdtype), r.ttl]
+    if r:
+        args.extend(r[0].to_args())
+    return tuple(args)
 
 
 class HttpFrontend(frontends.Frontend):
@@ -47,13 +219,6 @@ class HttpFrontend(frontends.Frontend):
         self.app = None
         self.site = None
         self.runner = None
-        self._rtype_to_add_op = {
-            'A':     self._add_ARecord,
-            'AAAA':  self._add_AAAARecord,
-            'CNAME': self._add_CNAMERecord,
-            'MX':    self._add_MXRecord,
-            'SRV':   self._add_SRVRecord,
-            'TXT':   self._add_TXTRecord}
 
         super().__init__(backend)
 
@@ -144,145 +309,6 @@ before you can make use of this service.</a>.
         if self.http_updates:
             yield f('update', self.update_handler.__doc__)
 
-    async def _common_args(self, zone, obj,
-            require=('dns_name', 'data', 'ttl', 'type'),
-            allowed=[]):
-
-        for p in obj:
-            if not (p in require or p in allowed or p in ('op', 'zone')):
-                raise ValueError('Unrecognized parameter: %s' % p)
-        for p in require:
-            if not obj.get(p):
-                raise ValueError('Missing required parameter: %s' % p)
-
-        dns_name = obj['dns_name']
-        if not await self.backend.is_in_zone(zone, dns_name):
-            raise ValueError('Not in zone %s: %s' % (zone, dns_name))
-
-        if 'ttl' not in require and 'ttl' not in obj:
-            ttl = None
-        else:
-            try:
-                ttl = dns.ttl.from_text('%s' % obj['ttl'])
-            except (KeyError, ValueError, dns.ttl.BadTTL):
-                raise ValueError('TTL missing or invalid')
-            if ttl < self.minimum_ttl:
-                raise ValueError('TTL is too low, %s < %s'
-                    % (ttl, self.minimum_ttl))
-
-        return dns_name, obj.get('type'), ttl, obj.get('data')
-
-    async def _mk_add_op(self, zone, dns_name, rtype, ttl, i1, i2, i3, data):
-        def _op(cli, dbT):
-            args = (zone, dns_name, rtype, ttl, i1, i2, i3, data)
-            logging.info('%s: add_to_rrset%s' % (cli, args))
-            # FIXME: We need to delete_rrset or delete_from_rrset
-            #        to ensure we do not end up with duplicate
-            #        records; which depends on the rtype.
-            return self.backend.add_to_rrset(dbT, *args)
-        return _op
-
-    async def _mk_delete_op(self, zone, obj):
-        dns_name, rtype, ttl, data = self._common_args(zone, obj,
-            require=('dns_name',),
-            allowed=('type', 'ttl', 'data'))
-
-        if rtype is None and dns_name == zone:
-            raise ValueError('Refused to delete entire zone: %s' % zone)
-
-        def _op(cli, dbT):
-            args = [zone, dns_name, rtype, data]
-            if rtype is None:
-                logging.info('%s: delete_all_rrsets%s' % (cli, args[:2]))
-                return self.backend.delete_all_rrsets(dbT, *args[:2])
-            elif data is None:
-                logging.info('%s: delete_rrset%s' % (cli, args[:3]))
-                return self.backend.delete_rrset(dbT, *args[:3])
-            else:
-                logging.info('%s: delete_from_rrset%s' % (cli, args[:4]))
-                return self.backend.delete_from_rrset(dbT, *args[:4])
-        return _op
-
-
-    async def _add_ARecord(self, zone, obj):
-        try:
-            dns_name, rtype, ttl, data = self._common_args(zone, obj)
-            dns.ipv4.inet_aton(data)
-            return await self._mk_add_op(
-                zone, dns_name, rtype, ttl, None, None, None, data)
-        except dns.exception.SyntaxError:
-            raise ValueError('Invalid IPv4 address: %s' % data)
-
-    async def _add_AAAARecord(self, zone, obj):
-        try:
-            dns_name, rtype, ttl, data = self._common_args(zone, obj)
-            dns.ipv6.inet_aton(data)
-            return await self._mk_add_op(
-                zone, dns_name, rtype, ttl, None, None, None, data)
-        except dns.exception.SyntaxError:
-            raise ValueError('Invalid IPv6 address: %s' % data)
-
-    async def _add_CNAMERecord(self, zone, obj):
-        dns_name, rtype, ttl, data = self._common_args(zone, obj)
-        if not re.match(r'^([a-zA-Z0-9_-]+)(\.[a-zA-Z0-9_-]+)*$', data):
-            raise ValueError('Invalid CNAME destination: %s' % data)
-        return await self._mk_add_op(
-            zone, dns_name, rtype, ttl, None, None, None, data)
-
-    async def _add_SRVRecord(self, zone, obj):
-        dns_name, rtype, ttl, data = self._common_args(zone, obj,
-            require=('dns_name', 'type', 'ttl',
-                     'priority', 'weight', 'port', 'data'))
-        try:
-            pri = int(obj['priority'])
-            weight = int(obj['weight'])
-            port = int(obj['port'])
-            if pri < 0 or port < 0 or weight < 0:
-                raise ValueError()
-        except (KeyError, ValueError):
-            raise ValueError('Invalid priority, weight or port')
-        if not re.match(r'^([a-zA-Z0-9_-]+)(\.[a-zA-Z0-9_-]+\.)*$', data):
-            raise ValueError('Invalid SRV destination: %s' % data)
-        return await self._mk_add_op(
-            zone, dns_name, rtype, ttl, pri, weight, port, data)
-
-    async def _add_MXRecord(self, zone, obj):
-        dns_name, rtype, ttl, data = self._common_args(zone, obj,
-            require=('dns_name', 'type', 'ttl', 'priority', 'data'))
-        try:
-            pri = int(obj['priority'])
-            if pri < 1:
-                raise ValueError()
-        except (KeyError, ValueError):
-            raise ValueError('Invalid priority')
-        if not re.match(r'^([a-zA-Z0-9_-]+)(\.[a-zA-Z0-9_-]+\.)*$', data):
-            raise ValueError('Invalid MX destination: %s' % data)
-        return await self._mk_add_op(
-            zone, dns_name, rtype, ttl, pri, None, None, data)
-
-    async def _add_TXTRecord(self, zone, obj):
-        dns_name, rtype, ttl, data = self._common_args(zone, obj)
-        return await self._mk_add_op(
-            zone, dns_name, rtype, ttl, None, None, None, data)
-
-
-    async def _updates_to_ops(self, zone, updates):
-        ops = []
-        for update in updates:
-            op = update['op']
-
-            if op == 'delete':
-                ops.append((update, await self._mk_delete_op(zone, update)))
-
-            elif op == 'add':
-                ops.append((
-                    update,
-                    await self._rtype_to_add_op[update['type']](zone, update)))
-
-            else:
-                raise ValueError('Unknown update: %s' % words[0])
-        return ops
-
     async def _do_updates(self, cli, zone, updates):
         dbT = None
         changes = 0
@@ -292,17 +318,33 @@ before you can make use of this service.</a>.
                     or not isinstance(updates[0], dict)):
                 raise ValueError('Need a list of updates')
 
-            ops = await self._updates_to_ops(zone, updates)
             dbT = await self.backend.transaction_start(zone)
             ok = True
             results = []
-            for req, op in ops:
-                ok = await op(cli, dbT)
+            for update in updates:
+                r = rrset_from_json(update)
+                args = (zone, *rrset_to_args(r))
+                if r.deleting:
+                    args = (args[0], args[1], args[2], args[-1])  # NOTE data is last
+                    # RFC2136 Section 2.5
+                    if r.deleting == dns.rdataclass.ANY and r.rdtype == dns.rdatatype.ANY:
+                        logging.info('%s: delete_all_rrsets%s' % (cli, args[:2]))
+                        ok = await self.backend.delete_all_rrsets(dbT, *args[:2])
+                    elif r.deleting == dns.rdataclass.ANY:
+                        logging.info('%s: delete_rrset%s' % (cli, args[:3]))
+                        ok = await self.backend.delete_rrset(dbT, *args[:3])
+                    elif r.deleting == dns.rdataclass.NONE:
+                        logging.info('%s: delete_from_rrset%s' % (cli, args[:4]))
+                        ok = await self.backend.delete_from_rrset(dbT, *args[:4])
+                else:
+                    logging.info('%s: add_to_rrset%s' % (cli, args))
+                    ok = await self.backend.add_to_rrset(dbT, *args)
+
                 if ok:
-                    results.append(['ok', req])
+                    results.append(['ok', update])
                     changes += 1
                 else:
-                    logging.error('Failed: %s' % req)
+                    logging.error('Failed: %s' % update)
                     break
 
             if changes:
@@ -314,9 +356,9 @@ before you can make use of this service.</a>.
             else:
                 raise Exception('Internal Error')
 
-        except ValueError as e:
+        except (KeyError, ValueError) as e:
             return (400, 'Bad request', {'error': str(e)})
-        except (json.decoder.JSONDecodeError, KeyError):
+        except json.decoder.JSONDecodeError:
             return (400, 'Bad request', {'error': 'Invalid request'})
         finally:
             if dbT is not None:
@@ -390,7 +432,7 @@ before you can make use of this service.</a>.
                 auth = auth.split(' ', 1)[1].strip()
             else:
                 auth = auth.replace(' ', '+').strip()  # Escaping is hard, yo
-            if not auth or auth not in keys:
+            if not auth or auth not in keys.values():
                 logging.info('Rejected %s: No valid keys provided for %s'
                     % (cli, zone))
                 raise PermissionError('Invalid DNS update key for %s' % zone)
@@ -444,7 +486,7 @@ before you can make use of this service.</a>.
                     % (cli, zone))
                 raise PermissionError('DNS updates unavailable for %s' % zone)
 
-            if not auth or auth not in keys:
+            if not auth or auth not in keys.values():
                 logging.info('Rejected %s: No valid keys provided for %s'
                     % (cli, zone))
                 raise PermissionError('Invalid DNS update key for %s' % zone)
