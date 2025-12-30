@@ -48,19 +48,19 @@ class Backend(abc.ABC):
         keys = await self.get_keys(zone)
         return key in keys
 
-    async def delete_all_rrsets(self, transaction, zone, r: dns.rrset.RRset) -> bool:
+    async def delete_all_rrsets(self, zone, r: dns.rrset.RRset, ctx = None) -> bool:
         """
         Delete all records for a given DNS name.
         """
         raise NotImplementedError()
 
-    async def delete_rrset(self, transaction, zone, r: dns.rrset.RRset) -> bool:
+    async def delete_rrset(self, zone, r: dns.rrset.RRset, ctx = None) -> bool:
         """
         Delete all records of a specific type, for a given DNS name.
         """
         raise NotImplementedError()
 
-    async def delete_from_rrset(self, transaction, zone, r: dns.rrset.RRset) -> bool:
+    async def delete_from_rrset(self, zone, r: dns.rrset.RRset, ctx = None) -> bool:
         """
         Delete all records of a specific type matching the given data,
         for a given DNS name. Note that for SRV and MX records, the
@@ -68,89 +68,32 @@ class Backend(abc.ABC):
         """
         raise NotImplementedError()
 
-    async def add_to_rrset(self, transaction, zone, r: dns.rrset.RRset) -> bool:
+    async def add_to_rrset(self, zone, r: dns.rrset.RRset, ctx = None) -> bool:
         """
         Add records of a specific type, to a given DNS name.
         """
         raise NotImplementedError()
 
-    async def update(self, cli: str, zone: dns.name.Name, updates: typing.Iterable[dns.rrset.RRset]):
+    async def update(self, cli: str, zone: dns.name.Name, updates: typing.Iterable[dns.rrset.RRset], ctx = None):
         zone_str = zone.to_text(omit_final_dot=True).lower()
-        error = None
-        try:
-            dbT = await self.transaction_start(zone_str)
-            changes = 0
-            ok = True
-            for r in updates:
-                if r.deleting:
-                    # RFC2136 Section 2.5
-                    if r.deleting == dns.rdataclass.ANY and r.rdtype == dns.rdatatype.ANY:
-                        logging.info('%s: delete_all_rrsets %s' % (cli, r))
-                        ok = await self.delete_all_rrsets(dbT, zone_str, r)
-                    elif r.deleting == dns.rdataclass.ANY:
-                        logging.info('%s: delete_rrset %s' % (cli, r))
-                        ok = await self.delete_rrset(dbT, zone_str, r)
-                    elif r.deleting == dns.rdataclass.NONE:
-                        logging.info('%s: delete_from_rrset %s' % (cli, r))
-                        ok = await self.delete_from_rrset(dbT, zone_str, r)
-                else:
-                    logging.info('%s: add_to_rrset %s' % (cli, r))
-                    ok = await self.add_to_rrset(dbT, zone_str, r)
-
-                if ok:
-                    changes += 1
-                else:
-                    break
-
-            if changes:
-                ok = await self.notify_changed(dbT, zone_str) and ok
-
-            if ok and await self.transaction_commit(dbT, zone_str):
-                dbT = None
-                return
+        for r in updates:
+            if r.deleting:
+                # RFC2136 Section 2.5
+                if r.deleting == dns.rdataclass.ANY and r.rdtype == dns.rdatatype.ANY:
+                    logging.info('%s: delete_all_rrsets %s' % (cli, r))
+                    await self.delete_all_rrsets(zone_str, r, ctx)
+                elif r.deleting == dns.rdataclass.ANY:
+                    logging.info('%s: delete_rrset %s' % (cli, r))
+                    await self.delete_rrset(zone_str, r, ctx)
+                elif r.deleting == dns.rdataclass.NONE:
+                    logging.info('%s: delete_from_rrset %s' % (cli, r))
+                    await self.delete_from_rrset(zone_str, r, ctx)
             else:
-                raise Exception('Internal Error')
-        except Exception as e:
-            # Save exception to handle rollback
-            error = e
-        finally:
-            if dbT is not None:
-                await self.transaction_rollback(dbT, zone_str, silent=(not changes))
-        if error:
-            raise error
+                logging.info('%s: add_to_rrset %s' % (cli, r))
+                await self.add_to_rrset(zone_str, r, ctx)
 
 
-class TemporaryBackend(Backend):
-    async def transaction_start(self, zone) -> typing.Any:
-        """
-        Starts a transaction and returns a handle representing it. This
-        handle will be passed as an argument to subsequent database
-        operations.
-        """
-        return None
-
-    async def transaction_commit(self, transaction, zone) -> bool:
-        """
-        Commit a set of changes to the database (end transaction).
-        """
-        return True
-
-    async def transaction_rollback(self, transaction, zone, silent=False) -> bool:
-        """
-        Cancel a set of changes to the database (abort transaction).
-        """
-        return True
-
-    async def notify_changed(self, transaction, zone) -> bool:
-        """
-        This is called at the end of an update, if changes have been made.
-        Subclasses may want to override this, to invoke custom logic to
-        notify secondary DNS servers they need to check for updates.
-        """
-        return True
-
-
-class SQLBackend(TemporaryBackend):
+class SQLBackend(Backend):
     """
     This is an SQL database back-end.
 
@@ -230,7 +173,10 @@ class SQLBackend(TemporaryBackend):
             }
         return []
 
-    async def delete_all_rrsets(self, transaction, zone, r) -> bool:
+    async def delete_all_rrsets(self, zone, r, ctx = None) -> bool:
+        if ctx is None or "transaction" not in ctx:
+            raise Exception("Missing transaction in context")
+        transaction = ctx["transaction"]
         dns_name = r.name.to_text(omit_final_dot=True)
         if transaction and self.sql_delete_all_rrsets:
             await transaction.sql(self.sql_delete_all_rrsets,
@@ -239,7 +185,10 @@ class SQLBackend(TemporaryBackend):
             return True
         return False
 
-    async def delete_rrset(self, transaction, zone, r) -> bool:
+    async def delete_rrset(self, zone, r, ctx = None) -> bool:
+        if ctx is None or "transaction" not in ctx:
+            raise Exception("Missing transaction in context")
+        transaction = ctx["transaction"]
         dns_name = r.name.to_text(omit_final_dot=True)
         rtype = dns.rdatatype.to_text(r.rdtype)
         if transaction and self.sql_delete_rrset:
@@ -250,7 +199,10 @@ class SQLBackend(TemporaryBackend):
             return True
         return False
 
-    async def delete_from_rrset(self, transaction, zone, r) -> bool:
+    async def delete_from_rrset(self, zone, r, ctx = None) -> bool:
+        if ctx is None or "transaction" not in ctx:
+            raise Exception("Missing transaction in context")
+        transaction = ctx["transaction"]
         dns_name = r.name.to_text(omit_final_dot=True)
         rtype = dns.rdatatype.to_text(r.rdtype)
         rdata = r[0].get_data()
@@ -263,7 +215,10 @@ class SQLBackend(TemporaryBackend):
             return True
         return False
 
-    async def add_to_rrset(self, transaction, zone, r) -> bool:
+    async def add_to_rrset(self, zone, r, ctx = None) -> bool:
+        if ctx is None or "transaction" not in ctx:
+            raise Exception("Missing transaction in context")
+        transaction = ctx["transaction"]
         dns_name = r.name.to_text(omit_final_dot=True)
         rtype = dns.rdatatype.to_text(r.rdtype)
         ttl = r.ttl
@@ -294,6 +249,22 @@ class SQLBackend(TemporaryBackend):
         if transaction and self.sql_notify_changed:
             await transaction.sql(self.sql_notify_changed, zone=zone)
         return True
+
+    async def update(self, cli: str, zone: dns.name.Name, updates: typing.Iterable[dns.rrset.RRset]):
+        zone_str = zone.to_text(omit_final_dot=True).lower()
+        error = None
+        try:
+            dbT = await self.transaction_start(zone_str)
+            await super().update(cli, zone, updates, {"transaction": dbT})
+        except Exception as e:
+            # Save exception to handle rollback
+            error = e
+        finally:
+            if error and dbT is not None:
+                await self.transaction_rollback(dbT, zone_str, silent=True)
+        if error:
+            raise error
+        await self.notify_changed(dbT, zone)
 
 
 class SQLiteTransaction:

@@ -50,13 +50,13 @@ class MockBackend(duppy.backends.Backend):
     async def check_key_in_zone(self, key, zone):
         return key in TEST_ZONES[zone]
 
-    async def delete_all_rrsets(self, dbT, zone, r):
+    async def delete_all_rrsets(self, zone, r, ctx=None):
         dns_name = r.name.to_text(omit_final_dot=True)
         global MOCK_ZONE
         MOCK_ZONE = [rr for rr in MOCK_ZONE if rr[0] == dns_name]
         return True
 
-    async def delete_rrset(self, dbT, zone, r):
+    async def delete_rrset(self, zone, r, ctx=None):
         dns_name = r.name.to_text(omit_final_dot=True)
         rtype = dns.rdatatype.to_text(r.rdtype)
         global MOCK_ZONE
@@ -65,7 +65,7 @@ class MockBackend(duppy.backends.Backend):
             or rr[1] != rtype]
         return True
 
-    async def delete_from_rrset(self, dbT, zone, r):
+    async def delete_from_rrset(self, zone, r, ctx=None):
         dns_name = r.name.to_text(omit_final_dot=True)
         rtype = dns.rdatatype.to_text(r.rdtype)
         rdata = r[0].get_data()
@@ -76,7 +76,7 @@ class MockBackend(duppy.backends.Backend):
             or rr[-1] != rdata]
         return True
 
-    async def add_to_rrset(self, dbT, zone, r):
+    async def add_to_rrset(self, zone, r, ctx=None):
         dns_name = r.name.to_text(omit_final_dot=True)
         rtype = dns.rdatatype.to_text(r.rdtype)
         ttl = r.ttl
@@ -94,12 +94,6 @@ class MockBackend(duppy.backends.Backend):
         rr = [dns_name, rtype, ttl, i1, i2, i3, rdata]
         if rr not in MOCK_ZONE:
             MOCK_ZONE.append(rr)
-        return True
-
-    async def notify_changed(self, dbT, zone):
-        print('*** Zone changed %s ***' % zone)
-        print('%s' % '\n'.join('%s' % rr for rr in MOCK_ZONE))
-        print('***')
         return True
 
 
