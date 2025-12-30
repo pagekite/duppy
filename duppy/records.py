@@ -1,3 +1,5 @@
+import typing
+
 import dns.immutable
 import dns.name
 import dns.rdata
@@ -41,8 +43,8 @@ class A(dns.rdtypes.IN.A.A):
             address=obj["data"],
         )
 
-    def to_args(self):
-        return None, None, None, self.address
+    def get_data(self):
+        return self.address
 
 
 @dns.immutable.immutable
@@ -55,8 +57,8 @@ class AAAA(dns.rdtypes.IN.AAAA.AAAA):
             address=obj["data"],
         )
 
-    def to_args(self):
-        return None, None, None, self.address
+    def get_data(self):
+        return self.address
 
 
 @dns.immutable.immutable
@@ -69,8 +71,8 @@ class CNAME(dns.rdtypes.ANY.CNAME.CNAME):
             target=obj["data"],
         )
 
-    def to_args(self):
-        return None, None, None, self.target.to_text()
+    def get_data(self):
+        return self.target.to_text()
 
 
 @dns.immutable.immutable
@@ -84,8 +86,8 @@ class MX(dns.rdtypes.ANY.MX.MX):
             exchange=obj["data"],
         )
 
-    def to_args(self):
-        return self.preference, None, None, self.exchange.to_text()
+    def get_data(self):
+        return self.exchange.to_text()
 
 
 @dns.immutable.immutable
@@ -101,8 +103,8 @@ class SRV(dns.rdtypes.IN.SRV.SRV):
             target=obj["data"],
         )
 
-    def to_args(self):
-        return self.priority, self.weight, self.port, self.target.to_text()
+    def get_data(self):
+        return self.target.to_text()
 
 
 @dns.immutable.immutable
@@ -115,8 +117,8 @@ class TXT(dns.rdtypes.ANY.TXT.TXT):
             strings=obj["data"],
         )
 
-    def to_args(self):
-        return None, None, None, self.strings
+    def get_data(self):
+        return self.strings
 
 
 # Register our extended classes to be found by dns.rdata.get_rdata_class()
@@ -169,8 +171,17 @@ def rrset_from_json(
     return r
 
 
-def rrset_to_args(r: dns.rrset.RRset):
-    args = [r.name.to_text(omit_final_dot=True), dns.rdatatype.to_text(r.rdtype), r.ttl]
-    if r:
-        args.extend(r[0].to_args())
-    return tuple(args)
+async def validate(zone: dns.name.Name, records: typing.Iterable[dns.rrset.RRset], backend: typing.Any, minimum_ttl: int):
+    for r in records:
+        if not await backend.is_in_zone(zone.to_text(), r.name.to_text()):
+            raise Exception("Not in zone %s: %s" % (zone.to_text(), r.name.to_text()))
+
+        if r.deleting is None:
+            if r.ttl < minimum_ttl:
+                raise Exception("TTL too low: %d < %d" % (r.ttl, minimum_ttl))
+        else:
+            if r.ttl != 0:
+                raise dns.exception.FormError(f"Invalid TTL {r.ttl} for deletion rate")
+
+        if r.name == zone and r.rdtype == dns.rdatatype.ANY:
+            raise Exception("Refused to delete entire zone: %s" % zone)

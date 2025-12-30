@@ -10,6 +10,8 @@
 import duppy
 import logging
 
+import dns.rdatatype
+
 
 TEST_KEYS = {
     "foo": "FM4d4LDAs9jP/N8EkvhhayqtqcO4tUJzvxsPyG20fkCE7g2IizVaTdeAwudLkwvhVECo50te6gJKhoxJkqUMOA==",
@@ -48,19 +50,25 @@ class MockBackend(duppy.backends.Backend):
     async def check_key_in_zone(self, key, zone):
         return key in TEST_ZONES[zone]
 
-    async def delete_all_rrsets(self, dbT, zone, dns_name):
+    async def delete_all_rrsets(self, dbT, zone, r):
+        dns_name = r.name.to_text(omit_final_dot=True)
         global MOCK_ZONE
         MOCK_ZONE = [rr for rr in MOCK_ZONE if rr[0] == dns_name]
         return True
 
-    async def delete_rrset(self, dbT, zone, dns_name, rtype):
+    async def delete_rrset(self, dbT, zone, r):
+        dns_name = r.name.to_text(omit_final_dot=True)
+        rtype = dns.rdatatype.to_text(r.rdtype)
         global MOCK_ZONE
         MOCK_ZONE = [rr for rr in MOCK_ZONE
             if rr[0] != dns_name
             or rr[1] != rtype]
         return True
 
-    async def delete_from_rrset(self, dbT, zone, dns_name, rtype, rdata):
+    async def delete_from_rrset(self, dbT, zone, r):
+        dns_name = r.name.to_text(omit_final_dot=True)
+        rtype = dns.rdatatype.to_text(r.rdtype)
+        rdata = r[0].get_data()
         global MOCK_ZONE
         MOCK_ZONE = [rr for rr in MOCK_ZONE
             if rr[0] != dns_name
@@ -68,7 +76,20 @@ class MockBackend(duppy.backends.Backend):
             or rr[-1] != rdata]
         return True
 
-    async def add_to_rrset(self, dbT, zone, dns_name, rtype, ttl, i1, i2, i3, rdata):
+    async def add_to_rrset(self, dbT, zone, r):
+        dns_name = r.name.to_text(omit_final_dot=True)
+        rtype = dns.rdatatype.to_text(r.rdtype)
+        ttl = r.ttl
+        i1 = None
+        i2 = None
+        i3 = None
+        if r.rdtype == dns.rdatatype.MX:
+            i1 = r[0].preference
+        elif r.rdtype == dns.rdatatype.SRV:
+            i1 = r[0].priority
+            i1 = r[0].weight
+            i1 = r[0].port
+        rdata = r[0].get_data()
         global MOCK_ZONE
         rr = [dns_name, rtype, ttl, i1, i2, i3, rdata]
         if rr not in MOCK_ZONE:

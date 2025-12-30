@@ -7,7 +7,6 @@ import dns.flags
 import dns.message
 import dns.opcode
 import dns.rcode
-import dns.rdataclass
 import dns.rdatatype
 import dns.rdtypes.ANY.SOA
 import dns.rrset
@@ -31,29 +30,27 @@ def response(msg, code=dns.rcode.SERVFAIL):
 
 
 async def handle_nsupdate(frontend, data, addr):
-    '''Handle DNS Update requests'''
+    """Handle DNS Update requests"""
     backend = frontend.backend
-    dbT = None
     msg = None
     cli = addr[0]
-    changes = 0
     try:
         keyring = dns.tsigkeyring.from_text(await backend.get_all_keys())
         msg = dns.message.from_wire(data, keyring=keyring)
         if msg.opcode() == dns.opcode.QUERY:
             msg: dns.update.QueryMessage = msg
             if len(msg.question) != 1:
-                logging.info('Only supports single question, got %d' % len(msg.question))
+                logging.info("Only supports single question, got %d" % len(msg.question))
                 yield response(msg, code=dns.rcode.NOTIMP)
             elif msg.question[0].rdtype != dns.rdatatype.SOA:
-                logging.info('Only supports SOA query, got %d' % dns.rdatatype.to_text(msg.qestion[0].rdtype))
+                logging.info("Only supports SOA query, got %d" % dns.rdatatype.to_text(msg.qestion[0].rdtype))
                 yield response(msg, code=dns.rcode.NOTIMP)
             else:
                 # This happens with nsupdate, if people do not specify a zone.
                 # Without the zone, nsupdate sends SOA queries to guess it.
                 question = msg.question[0]
                 for _, zone in (await backend.get_all_zones()).items():
-                    if zone.get('type') and dns.rdatatype.from_text(zone.get('type')) != question.rdtype:
+                    if zone.get("type") and dns.rdatatype.from_text(zone.get("type")) != question.rdtype:
                         continue
                     if await backend.is_in_zone(zone["name"], question.name.to_text(omit_final_dot=True)):
                         res = dns.message.make_response(msg)
@@ -62,18 +59,14 @@ async def handle_nsupdate(frontend, data, addr):
                             question.rdclass,
                             question.rdtype,
                             mname=dns.name.from_text(zone["hostname"]),
-                            rname=dns.name.from_text(''),
-                            serial=zone.get('serial', 0),
-                            refresh=zone.get('ttl', frontend.default_ttl),
+                            rname=dns.name.from_text(""),
+                            serial=zone.get("serial", 0),
+                            refresh=zone.get("ttl", frontend.default_ttl),
                             retry=0,
                             expire=0,
-                            minimum=0
+                            minimum=0,
                         )
-                        rrset = dns.rrset.from_rdata(
-                            question.name,
-                            soa_data.refresh,
-                            soa_data
-                        )
+                        rrset = dns.rrset.from_rdata(question.name, soa_data.refresh, soa_data)
                         res.answer.append(rrset)
                         yield res.to_wire()
                         break  # break to avoid going into else clause
@@ -87,90 +80,32 @@ async def handle_nsupdate(frontend, data, addr):
                 yield response(msg, code=dns.rcode.REFUSED)
             # section 1 (prerequisite)
             elif msg.prerequisite:
-                logging.info('Rejected %s: FIXME: prereqs do not work' % cli)
+                logging.info("Rejected %s: FIXME: prereqs do not work" % cli)
                 yield response(msg, code=dns.rcode.NOTIMP)
             # section 2 (update)
             else:
-                # FIXME: This logic overlaps a great deal with the logic
-                #        in the HTTP API, we should find a way to unify to
-                #        avoid duplicate effort and divergent behavior.
-
-                for upd in msg.update:
-                    upd: dns.rrset.RRset = upd
-                    if not await backend.is_in_zone(zone.to_text(), upd.name.to_text()):
-                        raise UpdateRejected(
-                            'Not in zone %s: %s' % (zone.to_text(), upd.name.to_text()))
-
-                    if upd.deleting is None:
-                        if upd.ttl < frontend.minimum_ttl:
-                            raise UpdateRejected('TTL too low: %d < %d'
-                                % (upd.ttl, frontend.minimum_ttl))
-                    else:
-                        if upd.ttl != 0:
-                            raise dns.exception.FormError(f"Invalid TTL {upd.ttl} for deletion update")
-
-                    if upd.name == zone and upd.rdtype == dns.rdatatype.ANY:
-                        raise UpdateRejected(
-                            'Refused to delete entire zone: %s' % zone)
-
-                zone = msg.zone[0].name.to_text(omit_final_dot=True).lower()
-                dbT = await backend.transaction_start(zone)
-                ok = 0
-                for r in msg.update:
-                    args = (zone, *records.rrset_to_args(r))
-                    if r.deleting:
-                        args = (args[0], args[1], args[2], args[-1])  # NOTE data is last
-                        # RFC2136 Section 2.5
-                        if r.deleting == dns.rdataclass.ANY and r.rdtype == dns.rdatatype.ANY:
-                            logging.info('%s: delete_all_rrsets%s' % (cli, args[:2]))
-                            ok = await backend.delete_all_rrsets(dbT, *args[:2])
-                        elif r.deleting == dns.rdataclass.ANY:
-                            logging.info('%s: delete_rrset%s' % (cli, args[:3]))
-                            ok = await backend.delete_rrset(dbT, *args[:3])
-                        elif r.deleting == dns.rdataclass.NONE:
-                            logging.info('%s: delete_from_rrset%s' % (cli, args[:4]))
-                            ok = await backend.delete_from_rrset(dbT, *args[:4])
-                    else:
-                        logging.info('%s: add_to_rrset%s' % (cli, args))
-                        ok = await backend.add_to_rrset(dbT, *args)
-
-                    if ok:
-                        changes += 1
-                    else:
-                        break
-
-                if changes:
-                    ok = await backend.notify_changed(dbT, zone) and ok
-
-                if ok:
-                    if await backend.transaction_commit(dbT, zone):
-                        yield response(msg, code=dns.rcode.NOERROR)
-                    else:
-                        yield response(msg, code=dns.rcode.SERVFAIL)
-                    dbT = None
-                else:
-                    # Rollback happens finally (below)
-                    yield response(msg, code=dns.rcode.SERVFAIL)
+                try:
+                    await records.validate(zone, msg.update, backend, frontend.minimum_ttl)
+                except Exception as e:
+                    raise UpdateRejected(str(e))
+                await backend.update(cli, zone, msg.update)
+                yield response(msg, code=dns.rcode.NOERROR)
 
     except dns.exception.FormError as e:
-        logging.info('Rejected %s: %s' % (cli, e))
+        logging.info("Rejected %s: %s" % (cli, e))
         yield response(msg, code=dns.rcode.FORMERR)
 
     except dns.message.UnknownTSIGKey as e:
-        logging.info('Rejected %s: %s' % (cli, e))
+        logging.info("Rejected %s: %s" % (cli, e))
         yield response(msg, code=dns.rcode.REFUSED)
 
     except UpdateRejected as e:
-        logging.info('Rejected %s: %s' % (cli, e))
+        logging.info("Rejected %s: %s" % (cli, e))
         yield response(msg, code=dns.rcode.NOTIMP)
 
     except:
-        logging.exception('Rejected %s: Internal error' % cli)
+        logging.exception("Rejected %s: Internal error" % cli)
         yield response(msg, code=dns.rcode.SERVFAIL)
-
-    finally:
-        if dbT is not None:
-            await backend.transaction_rollback(dbT, zone, silent=(not changes))
 
 
 class TCPHandler:
@@ -178,15 +113,15 @@ class TCPHandler:
         self.frontend = frontend
 
     async def handle_tcp(self, reader, writer):
-        addr = writer.transport.get_extra_info('peername')
+        addr = writer.transport.get_extra_info("peername")
         while True:
             try:
-                size, = struct.unpack('!H', await reader.readexactly(2))
+                (size,) = struct.unpack("!H", await reader.readexactly(2))
             except asyncio.IncompleteReadError:
                 break
             data = await reader.readexactly(size)
             async for result in handle_nsupdate(self.frontend, data, addr):
-                bsize = struct.pack('!H', len(result))
+                bsize = struct.pack("!H", len(result))
                 writer.write(bsize)
                 writer.write(result)
 
@@ -216,19 +151,19 @@ class DnsFrontend(frontends.Frontend):
     minimum_ttl: int
 
     def __init__(
-            self,
-            backend,
-            hostname = '0.0.0.0',
-            port = 8053,
-            enable_tcp = True,
-            enable_udp = True,
-            default_ttl = 300,
-            minimum_ttl = 120,
+        self,
+        backend,
+        hostname="0.0.0.0",
+        port=8053,
+        enable_tcp=True,
+        enable_udp=True,
+        default_ttl=300,
+        minimum_ttl=120,
     ):
         self.hostname = hostname
         self.port = port
         self.enable_tcp = enable_tcp
-        self.enable_udp  = enable_udp
+        self.enable_udp = enable_udp
         self.default_ttl = default_ttl
         self.minimum_ttl = minimum_ttl
         super().__init__(backend)
@@ -245,16 +180,14 @@ class DnsFrontend(frontends.Frontend):
 
         if self.enable_udp:
             loop = asyncio.get_event_loop()
-            transport, _protocol = await loop.create_datagram_endpoint(
-                lambda: DatagramProtocol(self),
-                local_addr=(self.hostname, self.port))
-            host = transport.get_extra_info('sockname')
+            transport, _protocol = await loop.create_datagram_endpoint(lambda: DatagramProtocol(self), local_addr=(self.hostname, self.port))
+            host = transport.get_extra_info("sockname")
             urls.append(f"udp://{host[0]}:{host[1]}")
 
-        logging.info('====================')
+        logging.info("====================")
         for url in urls:
-            logging.info('%s', url)
-        logging.info('====================')
+            logging.info("%s", url)
+        logging.info("====================")
 
-        logging.info('Servers started')
+        logging.info("Servers started")
         return tasks

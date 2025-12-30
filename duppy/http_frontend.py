@@ -1,10 +1,8 @@
 import asyncio
 import base64
-import json.decoder
 import logging
 
-import dns.rdataclass
-import dns.rdatatype
+import dns.name
 
 from aiohttp import web
 
@@ -137,60 +135,19 @@ before you can make use of this service.</a>.
             yield f('update', self.update_handler.__doc__)
 
     async def _do_updates(self, cli, zone, updates):
-        dbT = None
-        changes = 0
         try:
+            zone = dns.name.from_text(zone)
             if (not isinstance(updates, list)
                     or len(updates) < 1
                     or not isinstance(updates[0], dict)):
                 raise ValueError('Need a list of updates')
+            rrset_updates = [records.rrset_from_json(update) for update in updates]
+            await records.validate(zone, rrset_updates, self.backend, self.minimum_ttl)
 
-            dbT = await self.backend.transaction_start(zone)
-            ok = True
-            results = []
-            for update in updates:
-                r = records.rrset_from_json(update)
-                args = (zone, *records.rrset_to_args(r))
-                if r.deleting:
-                    args = (args[0], args[1], args[2], args[-1])  # NOTE data is last
-                    # RFC2136 Section 2.5
-                    if r.deleting == dns.rdataclass.ANY and r.rdtype == dns.rdatatype.ANY:
-                        logging.info('%s: delete_all_rrsets%s' % (cli, args[:2]))
-                        ok = await self.backend.delete_all_rrsets(dbT, *args[:2])
-                    elif r.deleting == dns.rdataclass.ANY:
-                        logging.info('%s: delete_rrset%s' % (cli, args[:3]))
-                        ok = await self.backend.delete_rrset(dbT, *args[:3])
-                    elif r.deleting == dns.rdataclass.NONE:
-                        logging.info('%s: delete_from_rrset%s' % (cli, args[:4]))
-                        ok = await self.backend.delete_from_rrset(dbT, *args[:4])
-                else:
-                    logging.info('%s: add_to_rrset%s' % (cli, args))
-                    ok = await self.backend.add_to_rrset(dbT, *args)
-
-                if ok:
-                    results.append(['ok', update])
-                    changes += 1
-                else:
-                    logging.error('Failed: %s' % update)
-                    break
-
-            if changes:
-                ok = await self.backend.notify_changed(dbT, zone) and ok
-
-            if ok and await self.backend.transaction_commit(dbT, zone):
-                dbT = None
-                return (200, 'OK', results)
-            else:
-                raise Exception('Internal Error')
-
+            await self.backend.update(cli, zone, rrset_updates)
+            return (200, 'OK', updates)
         except (KeyError, ValueError) as e:
             return (400, 'Bad request', {'error': str(e)})
-        except json.decoder.JSONDecodeError:
-            return (400, 'Bad request', {'error': 'Invalid request'})
-        finally:
-            if dbT is not None:
-                await self.backend.transaction_rollback(
-                    dbT, zone, silent=(not changes))
 
     async def update_handler(self, request):
         """
@@ -271,8 +228,10 @@ before you can make use of this service.</a>.
         except PermissionError as e:
             resp = web.json_response({'error': str(e)})
             resp.set_status(403, 'Access denied')
+        except (KeyError, ValueError) as e:
+            resp = web.json_response({'error': str(e)})
+            resp.set_status(400, 'Bad request')
         except:
-            logging.exception('Failed to parse')
             resp = web.json_response({'error': True})
             resp.set_status(500, 'Internal error')
 
@@ -350,7 +309,6 @@ before you can make use of this service.</a>.
         except PermissionError as e:
             c, m, j = 403, 'Access denied', {'error': str(e)}
         except:
-            logging.exception('Failed to parse')
             c, m, j = 500, 'Internal error', {'error': True}
 
         if c == 200:
