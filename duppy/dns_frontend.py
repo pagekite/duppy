@@ -10,16 +10,12 @@ import dns.rcode
 import dns.rdataclass
 import dns.rdatatype
 import dns.rdtypes.ANY.SOA
-import dns.rdtypes.IN.A
-import dns.rdtypes.IN.AAAA
-import dns.rdtypes.IN.SRV
-import dns.rdtypes.mxbase
-import dns.rdtypes.txtbase
 import dns.rrset
 import dns.tsigkeyring
 import dns.update
 
 from . import frontends
+from . import records
 
 
 class UpdateRejected(Exception):
@@ -99,7 +95,6 @@ async def handle_nsupdate(frontend, data, addr):
                 #        in the HTTP API, we should find a way to unify to
                 #        avoid duplicate effort and divergent behavior.
 
-                updates = []
                 for upd in msg.update:
                     upd: dns.rrset.RRset = upd
                     if not await backend.is_in_zone(zone.to_text(), upd.name.to_text()):
@@ -114,72 +109,30 @@ async def handle_nsupdate(frontend, data, addr):
                         if upd.ttl != 0:
                             raise dns.exception.FormError(f"Invalid TTL {upd.ttl} for deletion update")
 
-                    p1 = p2 = p3 = 0
-                    data = ''
-                    if upd:
-                        if len(upd) != 1:
-                            raise UpdateRejected('Unexpected number of data elements: %d != 1' % len(upd.items))
-                        data = upd[0]
-                        if upd.rdtype == dns.rdatatype.A:
-                            data: dns.rdtypes.IN.A.A = data
-                            data = data.address
-                        elif upd.rdtype == dns.rdatatype.AAAA:
-                            data: dns.rdtypes.IN.AAAA.AAAA = data
-                            data = data.address
-                        elif upd.rdtype == dns.rdatatype.MX:
-                            data: dns.rdtypes.mxbase.MXBase = data
-                            p1 = data.preference
-                            data = data.exchange
-                        elif upd.rdtype == dns.rdatatype.SRV:
-                            data: dns.rdtypes.IN.SRV.SRV = data
-                            p1 = data.priority
-                            p2 = data.weight
-                            p3 = data.port
-                            data = data.target
-                        elif upd.rdtype == dns.rdatatype.TXT:
-                            data: dns.rdtypes.txtbase.TXTBase = data
-                            data = data.strings
-                        else:
-                            raise UpdateRejected('Unimplemented: %s' % upd)
-
                     if upd.name == zone and upd.rdtype == dns.rdatatype.ANY:
                         raise UpdateRejected(
                             'Refused to delete entire zone: %s' % zone)
 
-                    # If we get this far, we like this update?
-                    updates.append((upd, p1, p2, p3, data))
-
                 zone = msg.zone[0].name.to_text(omit_final_dot=True).lower()
                 dbT = await backend.transaction_start(zone)
                 ok = 0
-                for upd, p1, p2, p3, data in updates:
-                    name = upd.name.to_text(omit_final_dot=True).lower()
-                    ttl = upd.ttl
-                    deleting = dns.rdataclass.to_text(upd.deleting) if upd.deleting else None
-                    rdtype = dns.rdatatype.to_text(upd.rdtype)
-
-                    if deleting is None:
-                        args = (zone, name, rdtype, ttl, p1, p2, p3, data)
+                for r in msg.update:
+                    args = (zone, *records.rrset_to_args(r))
+                    if r.deleting:
+                        args = (args[0], args[1], args[2], args[-1])  # NOTE data is last
+                        # RFC2136 Section 2.5
+                        if r.deleting == dns.rdataclass.ANY and r.rdtype == dns.rdatatype.ANY:
+                            logging.info('%s: delete_all_rrsets%s' % (cli, args[:2]))
+                            ok = await backend.delete_all_rrsets(dbT, *args[:2])
+                        elif r.deleting == dns.rdataclass.ANY:
+                            logging.info('%s: delete_rrset%s' % (cli, args[:3]))
+                            ok = await backend.delete_rrset(dbT, *args[:3])
+                        elif r.deleting == dns.rdataclass.NONE:
+                            logging.info('%s: delete_from_rrset%s' % (cli, args[:4]))
+                            ok = await backend.delete_from_rrset(dbT, *args[:4])
+                    else:
                         logging.info('%s: add_to_rrset%s' % (cli, args))
                         ok = await backend.add_to_rrset(dbT, *args)
-
-                    elif deleting == rdtype == 'ANY':
-                        args = (zone, name)
-                        logging.info('%s: delete_all_rrsets%s' % (cli, args))
-                        ok = await backend.delete_all_rrsets(dbT, *args)
-
-                    elif deleting == 'ANY' and rdtype != 'ANY':
-                        args = (zone, name, rdtype)
-                        logging.info('%s: delete_rrset%s' % (cli, args))
-                        ok = await backend.delete_rrset(dbT, *args)
-
-                    elif deleting == 'NONE':
-                        args = (zone, name, rdtype, data)
-                        logging.info('%s: delete_from_rrset%s' % (cli, args))
-                        ok = await backend.delete_from_rrset(dbT, *args)
-
-                    else:
-                        ok = False
 
                     if ok:
                         changes += 1
