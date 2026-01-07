@@ -197,7 +197,7 @@ class Server:
         server tasks.
         """
         from . import http_updates
-        return [await http_updates.AsyncHttpApiServer(self).run()]
+        return [asyncio.create_task(await http_updates.AsyncHttpApiServer(self).run())]
 
     async def main(self):
         """

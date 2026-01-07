@@ -273,7 +273,7 @@ async def start_dns_server(duppy):
     if duppy.rfc2136_tcp:
         server = await start_server(TCPHandler(resolver).handle_tcp, bind)
         urls.extend(get_server_hosts([server], 'tcp:'))
-        tasks.append(server.serve_forever())
+        tasks.append(asyncio.create_task(server.serve_forever()))
 
     if duppy.rfc2136_udp:
         hostname = host.hostname or '::'  # '::' includes both IPv4 and IPv6
