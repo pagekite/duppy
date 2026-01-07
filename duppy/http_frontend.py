@@ -1,35 +1,57 @@
+import asyncio
 import base64
-import json.decoder
 import logging
-import re
 
-import dns.ipv4
-import dns.ipv6
-import dns.ttl
+import dns.name
 
 from aiohttp import web
 
+from . import frontends
+from . import records
 
 
-class AsyncHttpApiServer:
-    def __init__(self, duppy):
+class HttpFrontend(frontends.Frontend):
+    hostname: str
+    port: int
+    http_prefix: str
+    default_ttl: int
+    minimum_ttl: int
+    http_welcome: bool
+    http_updates: bool
+    http_simple: bool
+
+    def __init__(
+            self,
+            backend,
+            hostname = '0.0.0.0',
+            port = 5380,
+            prefix = '/dnsup',
+            default_ttl = 300,
+            minimum_ttl = 120,
+            welcome = True,
+            updates = True,
+            simple = True,
+    ):
+        self.hostname = hostname
+        self.port = port
+        self.http_prefix  = prefix
+        self.default_ttl = default_ttl
+        self.minimum_ttl = minimum_ttl
+        self.http_welcome = welcome
+        self.http_updates = updates
+        self.http_simple  = simple
+
         self.app = None
         self.site = None
         self.runner = None
-        self.duppy = duppy
-        self._rtype_to_add_op = {
-            'A':     self._add_ARecord,
-            'AAAA':  self._add_AAAARecord,
-            'CNAME': self._add_CNAMERecord,
-            'MX':    self._add_MXRecord,
-            'SRV':   self._add_SRVRecord,
-            'TXT':   self._add_TXTRecord}
+
+        super().__init__(backend)
 
     def _path_update(self):
-        return self.duppy.http_prefix + '/v1/update'
+        return self.http_prefix + '/v1/update'
 
     def _path_simple(self):
-        return self.duppy.http_prefix + '/v1/simple'
+        return self.http_prefix + '/v1/simple'
 
     async def welcome_handler(self, request):
         """
@@ -53,12 +75,6 @@ this directly, and please take the IP addresses with a grain of salt!*
 This is a [duppy](https://github.com/pagekite/duppy/) server, for
 [dynamically updating DNS records](https://en.wikipedia.org/wiki/Dynamic_DNS).
 
-| Service                                                | status | protocol |
-| ------------------------------------------------------ | ------ | -------- |
-| [Simple HTTP updates](#simple)                                   | %s | %s |
-| [HTTP API updates](#update)                                      | %s | %s |
-| [RFC2136 updates](https://datatracker.ietf.org/doc/html/rfc2136) | %s | %s |
-
 Check your provider's documentation, or the
 [duppy Wiki](https://github.com/pagekite/duppy/wiki) for more information.
 
@@ -66,14 +82,7 @@ You will need to obtain an access token / secret key from your provider
 before you can make use of this service.</a>.
 
 ------------------------------------------------------------------------------
-%s""" % (
-            '**enabled**' if self.duppy.http_simple else 'disabled',
-            ('HTTP GET [%s](%s)' % (self._path_simple(), self._path_simple())) if self.duppy.http_simple else '',
-            '**enabled**' if self.duppy.http_updates else 'disabled',
-            ('HTTP POST [%s](%s)' % (self._path_update(), self._path_update())) if self.duppy.http_updates else '',
-            '**enabled**' if dns_port else 'disabled',
-            ('DNS on port %d' % dns_port) if dns_port else '',
-            '\n\n---------\n\n'.join(self._documentation(request, md=True))))
+%s""" % ('\n\n---------\n\n'.join(self._documentation(request, md=True))))
         else:
             return web.Response(content_type='text/html', text="""\
 <html><head>
@@ -92,14 +101,6 @@ before you can make use of this service.</a>.
     for <a href="https://en.wikipedia.org/wiki/Dynamic_DNS">dynamically
     updating DNS records</a>.
   </p>
-  <table><tr>
-    <td><a href="#simple">Simple HTTP updates</a></td><td>%s</td><td>%s</td>
-  </tr><tr>
-    <td><a href="#update">HTTP API updates</a></td><td>%s<td>%s</td>
-  </tr><tr>
-    <td><a href="https://datatracker.ietf.org/doc/html/rfc2136">RFC2136
-        updates</a></td><td>%s</td><td>%s</td>
-  </tr></table>
   <p>
     Check your provider's documentation, or the
     <a href="https://github.com/pagekite/duppy/wiki">the duppy Wiki</a> for
@@ -110,20 +111,13 @@ before you can make use of this service.</a>.
     from your provider before you can make use of this service.</a>.
   </p>
   <hr>
-%s</div></body></html>""" % (
-            '<b>enabled</b>' if self.duppy.http_simple else 'disabled',
-            ('HTTP GET <a href="%s">%s</a>' % (self._path_simple(), self._path_simple())) if self.duppy.http_simple else '',
-            '<b>enabled</b>' if self.duppy.http_updates else 'disabled',
-            ('HTTP POST <a href="%s">%s</a>' % (self._path_update(), self._path_update())) if self.duppy.http_updates else '',
-            '<b>enabled</b>' if dns_port else 'disabled',
-            ('DNS on port %d' % dns_port) if dns_port else '',
-            '<hr>'.join(self._documentation(request))))
+%s</div></body></html>""" % ('<hr>'.join(self._documentation(request))))
 
     def _documentation(self, request, md=False):
         def fmt1(a, txt):
             h2, body  = txt.strip().replace('\n        ', '\n').split('\n', 1)
             body = body.replace(
-               '/PREFIX', self.duppy.http_prefix).replace(
+               '/PREFIX', self.http_prefix).replace(
                'SERVER/', request.headers.get('Host', 'SERVER') + '/')
             return h2, body
 
@@ -135,189 +129,25 @@ before you can make use of this service.</a>.
             return '<a name="%s"></a>\n<h2>%s</h2>\n<pre>%s</pre>\n' % (a, h2, body)
 
         f = fmt_md if md else fmt_html
-        if self.duppy.http_simple:
+        if self.http_simple:
             yield f('simple', self.simple_handler.__doc__)
-        if self.duppy.http_updates:
+        if self.http_updates:
             yield f('update', self.update_handler.__doc__)
 
-    def _common_args(self, zone, obj,
-            require=('dns_name', 'data', 'ttl', 'type'),
-            allowed=[]):
-
-        for p in obj:
-            if not (p in require or p in allowed or p in ('op', 'zone')):
-                raise ValueError('Unrecognized parameter: %s' % p)
-        for p in require:
-            if not obj.get(p):
-                raise ValueError('Missing required parameter: %s' % p)
-
-        dns_name = obj['dns_name']
-        if not self.duppy.is_in_zone(zone, dns_name):
-            raise ValueError('Not in zone %s: %s' % (zone, dns_name))
-
-        if 'ttl' not in require and 'ttl' not in obj:
-            ttl = None
-        else:
-            try:
-                ttl = dns.ttl.from_text('%s' % obj['ttl'])
-            except (KeyError, ValueError, dns.ttl.BadTTL):
-                raise ValueError('TTL missing or invalid')
-            if ttl < self.duppy.minimum_ttl:
-                raise ValueError('TTL is too low, %s < %s'
-                    % (ttl, self.duppy.minimum_ttl))
-
-        return dns_name, obj.get('type'), ttl, obj.get('data')
-
-    def _mk_add_op(self, zone, dns_name, rtype, ttl, i1, i2, i3, data):
-        def _op(cli, dbT):
-            args = (zone, dns_name, rtype, ttl, i1, i2, i3, data)
-            logging.info('%s: add_to_rrset%s' % (cli, args))
-            # FIXME: We need to delete_rrset or delete_from_rrset
-            #        to ensure we do not end up with duplicate
-            #        records; which depends on the rtype.
-            return self.duppy.add_to_rrset(dbT, *args)
-        return _op
-
-    def _mk_delete_op(self, zone, obj):
-        dns_name, rtype, ttl, data = self._common_args(zone, obj,
-            require=('dns_name',),
-            allowed=('type', 'ttl', 'data'))
-
-        if rtype is None and dns_name == zone:
-            raise ValueError('Refused to delete entire zone: %s' % zone)
-
-        def _op(cli, dbT):
-            args = [zone, dns_name, rtype, data]
-            if rtype is None:
-                logging.info('%s: delete_all_rrsets%s' % (cli, args[:2]))
-                return self.duppy.delete_all_rrsets(dbT, *args[:2])
-            elif data is None:
-                logging.info('%s: delete_rrset%s' % (cli, args[:3]))
-                return self.duppy.delete_rrset(dbT, *args[:3])
-            else:
-                logging.info('%s: delete_from_rrset%s' % (cli, args[:4]))
-                return self.duppy.delete_from_rrset(dbT, *args[:4])
-        return _op
-
-
-    def _add_ARecord(self, zone, obj):
-        try:
-            dns_name, rtype, ttl, data = self._common_args(zone, obj)
-            dns.ipv4.inet_aton(data)
-            return self._mk_add_op(
-                zone, dns_name, rtype, ttl, None, None, None, data)
-        except dns.exception.SyntaxError:
-            raise ValueError('Invalid IPv4 address: %s' % data)
-
-    def _add_AAAARecord(self, zone, obj):
-        try:
-            dns_name, rtype, ttl, data = self._common_args(zone, obj)
-            dns.ipv6.inet_aton(data)
-            return self._mk_add_op(
-                zone, dns_name, rtype, ttl, None, None, None, data)
-        except dns.exception.SyntaxError:
-            raise ValueError('Invalid IPv6 address: %s' % data)
-
-    def _add_CNAMERecord(self, zone, obj):
-        dns_name, rtype, ttl, data = self._common_args(zone, obj)
-        if not re.match(r'^([a-zA-Z0-9_-]+)(\.[a-zA-Z0-9_-]+)*$', data):
-            raise ValueError('Invalid CNAME destination: %s' % data)
-        return self._mk_add_op(
-            zone, dns_name, rtype, ttl, None, None, None, data)
-
-    def _add_SRVRecord(self, zone, obj):
-        dns_name, rtype, ttl, data = self._common_args(zone, obj,
-            require=('dns_name', 'type', 'ttl',
-                     'priority', 'weight', 'port', 'data'))
-        try:
-            pri = int(obj['priority'])
-            weight = int(obj['weight'])
-            port = int(obj['port'])
-            if pri < 0 or port < 0 or weight < 0:
-                raise ValueError()
-        except (KeyError, ValueError):
-            raise ValueError('Invalid priority, weight or port')
-        if not re.match(r'^([a-zA-Z0-9_-]+)(\.[a-zA-Z0-9_-]+\.)*$', data):
-            raise ValueError('Invalid SRV destination: %s' % data)
-        return self._mk_add_op(
-            zone, dns_name, rtype, ttl, pri, weight, port, data)
-
-    def _add_MXRecord(self, zone, obj):
-        dns_name, rtype, ttl, data = self._common_args(zone, obj,
-            require=('dns_name', 'type', 'ttl', 'priority', 'data'))
-        try:
-            pri = int(obj['priority'])
-            if pri < 1:
-                raise ValueError()
-        except (KeyError, ValueError):
-            raise ValueError('Invalid priority')
-        if not re.match(r'^([a-zA-Z0-9_-]+)(\.[a-zA-Z0-9_-]+\.)*$', data):
-            raise ValueError('Invalid MX destination: %s' % data)
-        return self._mk_add_op(
-            zone, dns_name, rtype, ttl, pri, None, None, data)
-
-    def _add_TXTRecord(self, zone, obj):
-        dns_name, rtype, ttl, data = self._common_args(zone, obj)
-        return self._mk_add_op(
-            zone, dns_name, rtype, ttl, None, None, None, data)
-
-
-    def _updates_to_ops(self, zone, updates):
-        ops = []
-        for update in updates:
-            op = update['op']
-
-            if op == 'delete':
-                ops.append((update, self._mk_delete_op(zone, update)))
-
-            elif op == 'add':
-                ops.append((
-                    update,
-                    self._rtype_to_add_op[update['type']](zone, update)))
-
-            else:
-                raise ValueError('Unknown update: %s' % words[0])
-        return ops
-
     async def _do_updates(self, cli, zone, updates):
-        dbT = None
-        changes = 0
         try:
+            zone = dns.name.from_text(zone)
             if (not isinstance(updates, list)
                     or len(updates) < 1
                     or not isinstance(updates[0], dict)):
                 raise ValueError('Need a list of updates')
+            rrset_updates = [records.rrset_from_json(update) for update in updates]
+            await records.validate(zone, rrset_updates, self.backend, self.minimum_ttl)
 
-            ops = self._updates_to_ops(zone, updates)
-            dbT = await self.duppy.transaction_start(zone)
-            ok = True
-            results = []
-            for req, op in ops:
-                ok = await op(cli, dbT)
-                if ok:
-                    results.append(['ok', req])
-                    changes += 1
-                else:
-                    logging.error('Failed: %s' % req)
-                    break
-
-            if changes:
-                ok = await self.duppy.notify_changed(dbT, zone) and ok
-
-            if ok and await self.duppy.transaction_commit(dbT, zone):
-                dbT = None
-                return (200, 'OK', results)
-            else:
-                raise Exception('Internal Error')
-
-        except ValueError as e:
+            await self.backend.update(cli, zone, rrset_updates)
+            return (200, 'OK', updates)
+        except (KeyError, ValueError) as e:
             return (400, 'Bad request', {'error': str(e)})
-        except (json.decoder.JSONDecodeError, KeyError):
-            return (400, 'Bad request', {'error': 'Invalid request'})
-        finally:
-            if dbT is not None:
-                await self.duppy.transaction_rollback(
-                    dbT, zone, silent=(not changes))
 
     async def update_handler(self, request):
         """
@@ -373,7 +203,7 @@ before you can make use of this service.</a>.
             data = await request.json()
             zone = data.get('zone')
 
-            keys = await self.duppy.get_keys(zone)
+            keys = await self.backend.get_keys(zone)
             if not keys:
                 logging.info('Rejected %s: No update keys found for %s'
                     % (cli, zone))
@@ -386,7 +216,7 @@ before you can make use of this service.</a>.
                 auth = auth.split(' ', 1)[1].strip()
             else:
                 auth = auth.replace(' ', '+').strip()  # Escaping is hard, yo
-            if not auth or auth not in keys:
+            if not auth or auth not in keys.values():
                 logging.info('Rejected %s: No valid keys provided for %s'
                     % (cli, zone))
                 raise PermissionError('Invalid DNS update key for %s' % zone)
@@ -398,8 +228,10 @@ before you can make use of this service.</a>.
         except PermissionError as e:
             resp = web.json_response({'error': str(e)})
             resp.set_status(403, 'Access denied')
+        except (KeyError, ValueError) as e:
+            resp = web.json_response({'error': str(e)})
+            resp.set_status(400, 'Bad request')
         except:
-            logging.exception('Failed to parse')
             resp = web.json_response({'error': True})
             resp.set_status(500, 'Internal error')
 
@@ -434,13 +266,13 @@ before you can make use of this service.</a>.
             auth = str(base64.b64decode(auth.split(' ', 1)[1]), 'utf-8')
             zone, auth = auth.split(':', 1)
 
-            keys = await self.duppy.get_keys(zone)
+            keys = await self.backend.get_keys(zone)
             if not keys:
                 logging.info('Rejected %s: No update keys found for %s'
                     % (cli, zone))
                 raise PermissionError('DNS updates unavailable for %s' % zone)
 
-            if not auth or auth not in keys:
+            if not auth or auth not in keys.values():
                 logging.info('Rejected %s: No valid keys provided for %s'
                     % (cli, zone))
                 raise PermissionError('Invalid DNS update key for %s' % zone)
@@ -451,7 +283,7 @@ before you can make use of this service.</a>.
                 myipv6 = [ip for ip in myips if ':' in ip]
             myips = [ip for ip in myips if (':' not in ip) and ip]
             hostnames = request.query.get('hostname', '').split(',')
-            ttl = request.query.get('ttl', self.duppy.def_ddns_ttl)
+            ttl = request.query.get('ttl', self.default_ttl)
             if request.query.get('offline'):
                 myips = myipv6 = []
 
@@ -477,7 +309,6 @@ before you can make use of this service.</a>.
         except PermissionError as e:
             c, m, j = 403, 'Access denied', {'error': str(e)}
         except:
-            logging.exception('Failed to parse')
             c, m, j = 500, 'Internal error', {'error': True}
 
         if c == 200:
@@ -509,12 +340,12 @@ before you can make use of this service.</a>.
         for an aiohttp server, which subclasses could make use of.
         """
         routes = []
-        if self.duppy.http_welcome:
+        if self.http_welcome:
             routes.append(web.get('/', self.welcome_handler))
-        if self.duppy.http_simple:
+        if self.http_simple:
             routes.append(
                 web.get(self._path_simple(), self.simple_handler))
-        if self.duppy.http_updates:
+        if self.http_updates:
             routes.append(
                 web.post(self._path_update(), self.update_handler))
 
@@ -524,8 +355,11 @@ before you can make use of this service.</a>.
         await self.runner.setup()
 
         self.site = web.TCPSite(
-            self.runner, self.duppy.listen_on, self.duppy.http_port)
+            self.runner, self.hostname, self.port)
         logging.debug('Starting HttpApiServer on %s:%s'
-            % (self.duppy.listen_on, self.duppy.http_port))
+            % (self.hostname, self.port))
 
         return self.site.start()
+
+    async def get_tasks(self):
+        return [asyncio.create_task(await self.run())]

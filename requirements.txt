@@ -10,8 +10,6 @@ aiohttp==3.13.2
     # via -r requirements.in
 aiosignal==1.4.0
     # via aiohttp
-async-dns==2.0.0
-    # via -r requirements.in
 attrs==25.4.0
     # via aiohttp
 dnspython==2.8.0
