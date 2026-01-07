@@ -26,7 +26,6 @@ class Server:
     rfc2136_port = 8053
     rfc2136_tcp  = True
     rfc2136_udp  = True
-    upstream_dns = None
     log_level    = logging.INFO
     minimum_ttl  = 120
     def_ddns_ttl = 300
@@ -39,6 +38,8 @@ class Server:
     sql_db_password = None
 
     # Database operations
+    sql_get_all_keys = None
+    sql_get_all_zones = None
     sql_get_keys = None
     sql_delete_all_rrsets = None
     sql_delete_rrset = None
@@ -99,15 +100,45 @@ class Server:
             return False
         return True
 
+    async def get_all_zones(self):
+        if self.db and self.sql_get_all_zones:
+            return {
+                row[0]: {
+                    "zone": row[0],
+                    "hostname": row[1],
+                    "type": row[2],
+                    "ttl": row[3],
+                    "serial": row[4],
+                }
+                for row in await self.db.select(self.sql_get_all_zones)
+            }
+        return []
+
+    async def get_all_keys(self):
+        if self.db and self.sql_get_all_keys:
+            return {
+                row[0]: row[1]
+                for row in await self.db.select(self.sql_get_all_keys)
+            }
+        return []
+
     async def get_keys(self, zone):
         """
         Fetch the current valid keys for a given zone, as a list.
         """
         if self.db and self.sql_get_keys:
-            return [
-                row[0] for row in
-                await self.db.select(self.sql_get_keys, zone=zone)]
+            return {
+                row[0]: row[1]
+                for row in await self.db.select(self.sql_get_keys, zone=zone)
+            }
         return []
+
+    async def check_key_in_zone(self, key, zone):
+        """
+        Check if a key is present in a zone.
+        """
+        keys = await self.get_keys(zone)
+        return key in keys
 
     async def delete_all_rrsets(self, transaction, zone, dns_name):
         """

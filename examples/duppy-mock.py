@@ -12,11 +12,20 @@ import logging
 
 
 TEST_KEYS = {
-    'example.com' : [
-        'FM4d4LDAs9jP/N8EkvhhayqtqcO4tUJzvxsPyG20fkCE7g2IizVaTdeAwudLkwvhVECo50te6gJKhoxJkqUMOA==',
-        'QlRlQTl4OA46nPX0/QEk65AECEbreeF8K7guyr5bAsk=',
-        '+fnQhoAij/FNM0yCANXkKnxZCNIL7XI2yYRJokvTn+U='],
-    'example.org' : ['+fnQhoAij/FNM0yCANXkKnxZCNIL7XI2yYRJokvTn+U='],
+    "foo": "FM4d4LDAs9jP/N8EkvhhayqtqcO4tUJzvxsPyG20fkCE7g2IizVaTdeAwudLkwvhVECo50te6gJKhoxJkqUMOA==",
+    "bar": "QlRlQTl4OA46nPX0/QEk65AECEbreeF8K7guyr5bAsk=",
+    "other": "+fnQhoAij/FNM0yCANXkKnxZCNIL7XI2yYRJokvTn+U=",
+}
+
+TEST_ZONES = {
+    "example.com": [
+        "foo",
+        "bar",
+        "other",
+    ],
+    "example.org": [
+        "other",
+    ],
 }
 
 MOCK_ZONE = []
@@ -35,14 +44,21 @@ class MockServer(duppy.Server):
     #   - transaction_commit
     #   - transaction_rollback
 
+    async def get_all_zones(self):
+        return {zone: {"name": zone, "hostname": zone} for zone in TEST_ZONES.keys()}
+
+    async def get_all_keys(self):
+        return TEST_KEYS
+
     async def get_keys(self, zone):
-        while zone[-1:] == '.':
-            zone = zone[:-1]
-        if zone in TEST_KEYS:
-            return TEST_KEYS[zone]
+        if zone in TEST_ZONES:
+            return {key: TEST_KEYS[key] for key in TEST_ZONES[zone]}
         else:
-            logging.debug('Zone %s unavailable for updates' % zone)
+            logging.debug("Zone %s unavailable for updates" % zone)
             return []
+
+    async def check_key_in_zone(self, key, zone):
+        return key in TEST_ZONES[zone]
 
     async def delete_all_rrsets(self, dbT, zone, dns_name):
         global MOCK_ZONE
@@ -52,16 +68,16 @@ class MockServer(duppy.Server):
     async def delete_rrset(self, dbT, zone, dns_name, rtype):
         global MOCK_ZONE
         MOCK_ZONE = [rr for rr in MOCK_ZONE
-            if rr[0] == dns_name
-            and rr[1] == rtype]
+            if rr[0] != dns_name
+            or rr[1] != rtype]
         return True
 
     async def delete_from_rrset(self, dbT, zone, dns_name, rtype, rdata):
         global MOCK_ZONE
         MOCK_ZONE = [rr for rr in MOCK_ZONE
-            if rr[0] == dns_name
-            and rr[1] == rtype
-            and rr[-1] == rdata]
+            if rr[0] != dns_name
+            or rr[1] != rtype
+            or rr[-1] != rdata]
         return True
 
     async def add_to_rrset(self, dbT, zone, dns_name, rtype, ttl, i1, i2, i3, rdata):
