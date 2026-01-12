@@ -1,32 +1,22 @@
 import asyncio
-import base64
 import logging
 import socket
-import struct
-import time
-
-from typing import List, Tuple, Union
 
 import async_dns.server
 from async_dns.core import CacheNode, DNSMessage, types
 from async_dns.server import logger, TCPHandler, DNSDatagramProtocol
-from async_dns.server.serve import *
+from async_dns.server.serve import Host, get_server_hosts, get_url_items, repr_urls, start_server
 from async_dns.resolver import BaseResolver, ProxyResolver
-from async_dns.core.record import (
-    rdata_map,
-    SOA_RData,
-    A_RData,
-    AAAA_RData,
-    MX_RData,
-    SRV_RData,
-    TXT_RData,
-    CNAME_RData)
+from async_dns.core.record import rdata_map, A_RData, AAAA_RData
 
 
 # Sadly, async_dns does not currently support TSIG, so we need this
 # for validation and generation of correctly signed replies.
-import dns.tsig
 import dns.message
+import dns.opcode
+import dns.rcode
+import dns.rdataclass
+import dns.rdatatype
 import dns.tsigkeyring
 
 
@@ -39,9 +29,9 @@ class UpdateRejected(Exception):
 
 
 class DNSUpdateMessage(DNSMessage):
-    zd = property(lambda s: s.qd if (s.o == 5) else None)
-    pd = property(lambda s: s.an if (s.o == 5) else None)
-    up = property(lambda s: s.ns if (s.o == 5) else None)
+    zd = property(lambda s: s.qd if (s.o == dns.opcode.UPDATE) else None)
+    pd = property(lambda s: s.an if (s.o == dns.opcode.UPDATE) else None)
+    up = property(lambda s: s.ns if (s.o == dns.opcode.UPDATE) else None)
 
 
 class Patched_A_RData(A_RData):
@@ -49,6 +39,16 @@ class Patched_A_RData(A_RData):
     def load(cls, data: bytes, l: int, size: int):
         if size:
             ip = socket.inet_ntoa(data[l:l + size])
+            return l + size, cls(ip)
+        else:
+            return l + size, cls('')
+
+
+class Patched_AAAA_RData(AAAA_RData):
+    @classmethod
+    def load(cls, data: bytes, l: int, size: int):
+        if size:
+            ip = socket.inet_ntop(socket.AF_INET6, data[l:l + size])
             return l + size, cls(ip)
         else:
             return l + size, cls('')
@@ -62,7 +62,7 @@ class NsUpdateResolver(ProxyResolver):
         self.duppy = duppy
 
 
-def response(msg, keys, code=2):
+def response(msg, keys, code=dns.rcode.SERVFAIL):
     if isinstance(msg, DNSMessage):
         return DNSMessage(qr=1, o=msg.o, qid=msg.qid, aa=0, r=code).pack()
     elif isinstance(msg, dns.message.Message):
@@ -76,7 +76,7 @@ def response(msg, keys, code=2):
 async def validate_hmac(msg, raw_data, cli, rargs):
     # Make sure there are some TSIGs, otherwise the validator
     # below will happily parse the request as valid!
-    if len([r for r in msg.ar if r.qtype == 250]) < 1:
+    if len([r for r in msg.ar if r.qtype == dns.rdatatype.TSIG]) < 1:
         logging.debug(
             'Rejected %s: Failed to validate HMAC. No TSIG records found!'
             % cli)
@@ -133,15 +133,15 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
                     yield r
             else:
                 logging.debug('Rejected %s: non-update query' % cli)
-                yield response(*rargs, code=4)
+                yield response(*rargs, code=dns.rcode.NOTIMP)
 
         elif (len(msg.zd) != 1) or (msg.zd[0].qtype != types.SOA):
             logging.debug('Rejected %s: update Zone section is invalid' % cli)
-            yield response(*rargs, code=1)
+            yield response(*rargs, code=dns.rcode.FORMERR)
 
         elif msg.pd:
             logging.info('Rejected %s: FIXME: prereqs do not work' % cli)
-            yield response(*rargs, code=4)
+            yield response(*rargs, code=dns.rcode.NOTIMP)
 
         else:
             zone = msg.zd[0].name.lower()
@@ -149,12 +149,12 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
             if not keys:
                 logging.info('Rejected %s: No update keys found for %s'
                     % (cli, zone))
-                yield response(*rargs, code=9)
+                yield response(*rargs, code=dns.rcode.NOTAUTH)
 
             # Note: Here be magic, validate_hmac will as a side-effect
             #       change rargs so responses from here on get signed.
             elif not await validate_hmac(msg, data, cli, rargs):
-                yield response(*rargs, code=5)
+                yield response(*rargs, code=dns.rcode.REFUSED)
 
             else:
                 updates = []
@@ -164,13 +164,13 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
                 #        avoid duplicate effort and divergent behavior.
 
                 for upd in msg.up:
-                    qclass = {255: 'ANY', 254: 'NONE', 1: 'zone'}[upd.qclass]
+                    qclass = dns.rdataclass.to_text(upd.qclass)
 
                     if not duppy.is_in_zone(zone, upd.name):
                         raise UpdateRejected(
                             'Not in zone %s: %s' % (zone, upd.name))
 
-                    if (qclass == 'zone') and (upd.ttl < duppy.minimum_ttl):
+                    if (qclass == 'IN') and (upd.ttl < duppy.minimum_ttl):
                         raise UpdateRejected('TTL too low: %d < %d'
                             % (upd.ttl, duppy.minimum_ttl))
 
@@ -217,7 +217,7 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
                         logging.info('%s: delete_from_rrset%s' % (cli, args))
                         ok = await duppy.delete_from_rrset(dbT, *args)
 
-                    elif qclass == 'zone':
+                    elif qclass == 'IN':
                         args = (zone, upd.name, qtype, upd.ttl, p1, p2, p3, data)
                         logging.info('%s: add_to_rrset%s' % (cli, args))
                         # FIXME: We need to delete_rrset or delete_from_rrset
@@ -238,21 +238,21 @@ async def handle_nsupdate(resolver: BaseResolver, data, addr, protocol):
 
                 if ok:
                     if await duppy.transaction_commit(dbT, zone):
-                        yield response(*rargs, code=0)  # NOERROR
+                        yield response(*rargs, code=dns.rcode.NOERROR)
                     else:
-                        yield response(*rargs, code=2)  # SERVFAIL
+                        yield response(*rargs, code=dns.rcode.SERVFAIL)
                     dbT = None
                 else:
                     # Rollback happens finally (below)
-                    yield response(*rargs, code=2)  # SERVFAIL
+                    yield response(*rargs, code=dns.rcode.SERVFAIL)
 
     except UpdateRejected as e:
         logging.info('Rejected %s: %s' % (cli, e))
-        yield response(*rargs, code=4)
+        yield response(*rargs, code=dns.rcode.NOTIMP)
 
     except:
         logging.exception('Rejected %s: Internal error' % cli)
-        yield response(*rargs, code=2)  # SERVFAIL
+        yield response(*rargs, code=dns.rcode.SERVFAIL)
 
     finally:
         if dbT is not None:
@@ -295,5 +295,6 @@ def AsyncDnsUpdateServer(duppy):
     # FIXME: monkey-patch async_dns instead of duplicating lots of code.
     async_dns.server.handle_dns = handle_nsupdate
     rdata_map[Patched_A_RData.rtype] = Patched_A_RData
+    rdata_map[Patched_AAAA_RData.rtype] = Patched_AAAA_RData
 
     return start_dns_server(duppy)

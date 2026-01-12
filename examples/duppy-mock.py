@@ -52,16 +52,16 @@ class MockServer(duppy.Server):
     async def delete_rrset(self, dbT, zone, dns_name, rtype):
         global MOCK_ZONE
         MOCK_ZONE = [rr for rr in MOCK_ZONE
-            if rr[0] == dns_name
-            and rr[1] == rtype]
+            if rr[0] != dns_name
+            or rr[1] != rtype]
         return True
 
     async def delete_from_rrset(self, dbT, zone, dns_name, rtype, rdata):
         global MOCK_ZONE
         MOCK_ZONE = [rr for rr in MOCK_ZONE
-            if rr[0] == dns_name
-            and rr[1] == rtype
-            and rr[-1] == rdata]
+            if rr[0] != dns_name
+            or rr[1] != rtype
+            or rr[-1] != rdata]
         return True
 
     async def add_to_rrset(self, dbT, zone, dns_name, rtype, ttl, i1, i2, i3, rdata):
